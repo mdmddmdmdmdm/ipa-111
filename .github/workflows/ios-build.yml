@@ -1,0 +1,390 @@
+name: iOS Unsigned IPA (GitHub Actions)
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch: # Allows manual trigger from GitHub Actions tab or CLI
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Set up CocoaPods & Xcode
+        run: |
+          sudo gem install cocoapods || true
+
+      - name: Extract zipped source (if any)
+        run: |
+          #!/usr/bin/env bash
+          set -eo pipefail
+
+          ROOT="$PWD"
+          echo "$ROOT" > "$ROOT/.project_root"
+
+          if [ -z "$(find . -maxdepth 1 \( -name '*.xcodeproj' -o -name '*.xcworkspace' -o -name 'Package.swift' -o -name 'pubspec.yaml' -o -name 'package.json' -o -name 'project.yml' \) | head -1)" ]; then
+            ZIP=""
+            if [ -n "$ZIP_NAME" ] && [ -f "$ZIP_NAME" ]; then
+              ZIP="$ZIP_NAME"
+            else
+              while IFS= read -r f; do
+                f="${f#./}"
+                VER=$(printf '%s' "$f" | grep -oiE '(^|[^A-Za-z0-9])(version|ver|v)[^A-Za-z0-9]*[0-9]+' | head -1 | grep -oE '[0-9]+$' || true)
+                [ -z "$VER" ] && VER=0
+                TS=$(git log -1 --format=%ct -- "$f" 2>/dev/null || true)
+                [ -z "$TS" ] && TS=0
+                printf '%08d %012d %s\n' "$VER" "$TS" "$f"
+              done < <(find . -maxdepth 1 -iname "*.zip") | sort > "$ROOT/build_zip_rank.txt" || true
+              ZIP=$(tail -1 "$ROOT/build_zip_rank.txt" | cut -d' ' -f3-)
+            fi
+            rm -f "$ROOT/build_zip_rank.txt"
+
+            if [ -n "$ZIP" ]; then
+              echo "Using zip: $ZIP"
+              echo "$ZIP" > "$ROOT/.zip_name"
+              rm -rf "$ROOT/src"
+              mkdir -p "$ROOT/src"
+              unzip -q -o "$ROOT/$ZIP" -d "$ROOT/src"
+              rm -rf "$ROOT/src/__MACOSX"
+              ENTRIES=$(find "$ROOT/src" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')
+              if [ "$ENTRIES" = "1" ] && [ -d "$(find "$ROOT/src" -mindepth 1 -maxdepth 1)" ]; then
+                echo "$(find "$ROOT/src" -mindepth 1 -maxdepth 1)" > "$ROOT/.project_root"
+              else
+                echo "$ROOT/src" > "$ROOT/.project_root"
+              fi
+            fi
+          fi
+          echo "Project root: $(cat "$ROOT/.project_root")"
+
+      - name: Generate project and install dependencies
+        env:
+          DOTENV_CONTENT: ${{ secrets.DOTENV_CONTENT }}
+        run: |
+          #!/usr/bin/env bash
+          set -eo pipefail
+
+          ROOT="$PWD"
+          mkdir -p "$ROOT/build"
+          cd "$(cat "$ROOT/.project_root")"
+
+          find_first() {
+            find . -name "$1" -not -path "*/Pods/*" -not -path "*/node_modules/*" -not -path "*/.build/*" -not -path "*/.git/*" -not -path "*/__MACOSX/*" 2>/dev/null | head -1 || true
+          }
+
+          if [ -f pubspec.yaml ]; then
+            echo "Flutter project detected"
+            flutter config --no-enable-swift-package-manager || true
+
+            TPS=lib/features/catalog/widgets/third_party_providers_screen.dart
+            if [ -f "$TPS" ] && grep -q 'CatalogProvider\.' "$TPS" && ! grep -q 'catalog_models.dart' "$TPS"; then
+              perl -0pi -e "s|import '../catalog_provider.dart';|import '../catalog_models.dart';\nimport '../catalog_provider.dart';|" "$TPS"
+            fi
+
+            JP=lib/features/catalog/services/janny_provider.dart
+            if [ -f "$JP" ] && grep -q '^CatalogSearchResult _jannyResult(' "$JP"; then
+              perl -0pi -e 's/^CatalogSearchResult _jannyResult\(Map<String, dynamic> data\) \{/Future<CatalogSearchResult> _jannyResult(Map<String, dynamic> data) async {/m; s/return _jannyResult\(await _jannyMultiSearch\(attempts\[i\]\)\);/return await _jannyResult(await _jannyMultiSearch(attempts[i]));/' "$JP"
+            fi
+
+            # Safety net: flutter_inappwebview 6.2 passes JavaScriptHandlerFunctionData
+            # (not a bare List) to addJavaScriptHandler callbacks. Fix `callback: (args) {`.
+            { grep -rl --include=*.dart 'callback: (args) {' lib 2>/dev/null || true; } | while IFS= read -r F; do
+              if grep -q 'package:flutter_inappwebview/' "$F" && ! grep -q 'List<dynamic> args) callback' "$F"; then
+                echo "Patching JS handler callback in $F"
+                perl -0pi -e 's/(addJavaScriptHandler\(\s*handlerName:\s*[^,]+,\s*callback:\s*)\(args\)\s*\{/$1(JavaScriptHandlerFunctionData jsHandlerData) {\n final args = jsHandlerData.args;/g' "$F"
+              fi
+            done
+
+            # Safety net: a multi-line string call closed with `""")` and no `;` right
+            # before `} catch` (the SpicyChat login sheet bug that broke build_runner).
+            { grep -rl --include=*.dart '^""")[[:space:]]*$' lib 2>/dev/null || true; } | while IFS= read -r F; do
+              perl -0pi -e 's/^("""\))[ \t]*\n(\s*\} catch)/$1;\n$2/mg' "$F"
+            done
+
+            awk '/^flutter:/{f=1;next} f&&/^[^ #]/{f=0} f&&/^[ ]+assets:/{a=1;next} a&&/^[ ]+- /{sub(/^[ ]+- /,"");print;next} a&&!/^[ ]+(-|#)/&&NF{a=0}' pubspec.yaml | tr -d '\r' | while IFS= read -r A; do
+              [ -z "$A" ] && continue
+              [ "$A" = ".env" ] && continue
+              if [ ! -e "$A" ]; then
+                case "$A" in
+                  */) mkdir -p "$A"; touch "$A/.keep" ;;
+                  *)  mkdir -p "$(dirname "$A")"; touch "$A" ;;
+                esac
+              fi
+            done
+
+            flutter precache --ios
+            flutter pub get
+
+            if [ ! -f .env ]; then
+              if [ -n "$DOTENV_CONTENT" ]; then
+                printf '%s\n' "$DOTENV_CONTENT" > .env
+              elif [ -f .env.example ]; then
+                cp .env.example .env
+              else
+                touch .env
+              fi
+            fi
+
+            if [ -f l10n.yaml ]; then
+              flutter gen-l10n
+            fi
+
+            if grep -q "build_runner" pubspec.yaml; then
+              set +e
+              dart run build_runner build > "$ROOT/build/build_runner.log" 2>&1
+              BR_STATUS=$?
+              set -e
+              if [ "$BR_STATUS" -ne 0 ]; then
+                echo "::group::build_runner log (last 80 lines)"
+                tail -80 "$ROOT/build/build_runner.log" || true
+                echo "::endgroup::"
+                echo "Dart errors:"
+                dart analyze lib 2>&1 | grep -E "^\s*error" | head -60 || true
+                exit "$BR_STATUS"
+              fi
+            fi
+
+            if [ -d ios ]; then
+              if [ ! -d ios/Runner.xcworkspace ] && [ -d ios/Runner.xcodeproj ]; then
+                mkdir -p ios/Runner.xcworkspace
+                printf '%s\n' \
+                  '<?xml version="1.0" encoding="UTF-8"?>' \
+                  '<Workspace version = "1.0">' \
+                  '   <FileRef location = "group:Runner.xcodeproj">' \
+                  '   </FileRef>' \
+                  '</Workspace>' > ios/Runner.xcworkspace/contents.xcworkspacedata
+              fi
+
+              for XC in ios/Flutter/Release.xcconfig; do
+                if [ -f "$XC" ] && ! grep -q "ENABLE_USER_SCRIPT_SANDBOXING" "$XC"; then
+                  printf '\nENABLE_USER_SCRIPT_SANDBOXING=NO\n' >> "$XC"
+                fi
+              done
+
+              if [ -f ios/Podfile ]; then
+                (cd ios && (pod install || pod install --repo-update))
+              fi
+            fi
+            exit 0
+          fi
+
+          if [ -f package.json ]; then
+            if [ -f yarn.lock ]; then yarn install; elif [ -f package-lock.json ]; then npm ci; else npm install; fi
+          fi
+
+          if [ -f package.json ] && grep -q '"expo"' package.json && [ -z "$(find_first '*.xcodeproj')" ]; then
+            npx expo prebuild --platform ios --no-install
+          fi
+
+          if ls capacitor.config.* >/dev/null 2>&1; then
+            if grep -q '"build"' package.json; then npm run build; fi
+            if [ -z "$(find_first '*.xcodeproj')" ]; then npx cap add ios; fi
+            npx cap sync ios
+          fi
+
+          if [ -z "$(find_first '*.xcodeproj')" ]; then
+            SPEC=$(find_first "project.yml")
+            [ -z "$SPEC" ] && SPEC=$(find_first "project.yaml")
+            if [ -n "$SPEC" ]; then
+              command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
+              (cd "$(dirname "$SPEC")" && xcodegen generate --spec "$(basename "$SPEC")")
+            fi
+          fi
+
+          PODFILE=$(find_first "Podfile")
+          if [ -n "$PODFILE" ]; then
+            cd "$(dirname "$PODFILE")"
+            pod install || pod install --repo-update
+          fi
+
+      - name: Build unsigned app and package IPA
+        env:
+          DOTENV_CONTENT: ${{ secrets.DOTENV_CONTENT }}
+        run: |
+          #!/usr/bin/env bash
+          set -eo pipefail
+
+          ROOT="$PWD"
+          mkdir -p "$ROOT/build/ipa"
+          cd "$(cat "$ROOT/.project_root")"
+
+          find_first() {
+            find . -name "$1" -not -path "*/Pods/*" -not -path "*/node_modules/*" -not -path "*/.build/*" -not -path "*/.git/*" -not -path "*/__MACOSX/*" 2>/dev/null | head -1 || true
+          }
+
+          if [ -f pubspec.yaml ]; then
+            flutter config --no-enable-swift-package-manager || true
+
+            if [ ! -f .env ]; then
+              if [ -n "$DOTENV_CONTENT" ]; then
+                printf '%s\n' "$DOTENV_CONTENT" > .env
+              elif [ -f .env.example ]; then
+                cp .env.example .env
+              else
+                touch .env
+              fi
+            fi
+
+            if grep -q "build_runner" pubspec.yaml && [ -z "$(find lib \( -name '*.g.dart' -o -name '*.freezed.dart' \) | head -1)" ]; then
+              dart run build_runner build
+            fi
+
+            if [ -d ios/Runner.xcodeproj ] && [ ! -d ios/Runner.xcworkspace ]; then
+              mkdir -p ios/Runner.xcworkspace
+              printf '%s\n' \
+                '<?xml version="1.0" encoding="UTF-8"?>' \
+                '<Workspace version = "1.0">' \
+                '   <FileRef location = "group:Runner.xcodeproj">' \
+                '   </FileRef>' \
+                '</Workspace>' > ios/Runner.xcworkspace/contents.xcworkspacedata
+            fi
+
+            if [ -f ios/Flutter/Release.xcconfig ] && ! grep -q "ENABLE_USER_SCRIPT_SANDBOXING" ios/Flutter/Release.xcconfig; then
+              printf '\nENABLE_USER_SCRIPT_SANDBOXING=NO\n' >> ios/Flutter/Release.xcconfig
+            fi
+
+            flutter analyze --no-fatal-infos --no-fatal-warnings > "$ROOT/build/analyze.log" 2>&1 || true
+            echo "Analyzer errors (if any):"
+            grep -E "^\s*error" "$ROOT/build/analyze.log" | head -60 || true
+
+            # Fail fast: an error in lib/ will break the Xcode build anyway, and
+            # Flutter then reports a misleading "Development Team" signing message.
+            if grep -E "^\s*error .*• lib/" "$ROOT/build/analyze.log" >/dev/null 2>&1; then
+              echo "::error::Dart analyzer found errors in lib/ - fix these before building."
+              exit 1
+            fi
+
+            set +e
+            flutter build ios --release --no-codesign -v > "$ROOT/build/flutter_build.log" 2>&1
+            BUILD_STATUS=$?
+            set -e
+
+            APP_PATH=""
+            if [ "$BUILD_STATUS" -eq 0 ]; then
+              APP_PATH=$(find build/ios/iphoneos -maxdepth 1 -name "*.app" | head -1 || true)
+              [ -n "$APP_PATH" ] && APP_PATH="$PWD/$APP_PATH"
+            else
+              if grep -q -E "\.dart:[0-9]+:[0-9]+: Error" "$ROOT/build/flutter_build.log"; then
+                echo "Dart compile errors:"
+                grep -E "\.dart:[0-9]+:[0-9]+: Error" "$ROOT/build/flutter_build.log" | sort -u | head -60 || true
+                exit "$BUILD_STATUS"
+              fi
+
+              flutter build ios --config-only --release --no-codesign > "$ROOT/build/flutter_config.log" 2>&1 || true
+
+              set +e
+              xcodebuild build \
+                -workspace ios/Runner.xcworkspace \
+                -scheme Runner \
+                -configuration Release \
+                -sdk iphoneos \
+                -destination 'generic/platform=iOS' \
+                -derivedDataPath "$ROOT/build/derived" \
+                CODE_SIGNING_ALLOWED=NO \
+                CODE_SIGNING_REQUIRED=NO \
+                CODE_SIGN_IDENTITY="" \
+                ENABLE_USER_SCRIPT_SANDBOXING=NO \
+                > "$ROOT/build/xcodebuild.log" 2>&1
+              XC_STATUS=$?
+              set -e
+
+              if [ "$XC_STATUS" -ne 0 ]; then
+                echo "xcodebuild errors:"
+                grep -E "error:|\*\* BUILD FAILED" "$ROOT/build/xcodebuild.log" | sort -u | head -60 || true
+                exit "$XC_STATUS"
+              fi
+
+              APP_PATH=$(find "$ROOT/build/derived/Build/Products" -maxdepth 2 -name "*.app" -path "*iphoneos*" | head -1 || true)
+            fi
+          else
+            PROJECT="${XCODE_PROJECT:-}"
+            [ -z "$PROJECT" ] && PROJECT=$(find_first "*.xcodeproj")
+
+            WORKSPACE="${XCODE_WORKSPACE:-}"
+            if [ -z "$WORKSPACE" ] && [ -n "$PROJECT" ]; then
+              CANDIDATE="${PROJECT%.xcodeproj}.xcworkspace"
+              [ -d "$CANDIDATE" ] && WORKSPACE="$CANDIDATE"
+            fi
+
+            PACKAGE_DIR=""
+            if [ -z "$PROJECT" ] && [ -z "$WORKSPACE" ]; then
+              PKG=$(find_first "Package.swift")
+              [ -n "$PKG" ] && PACKAGE_DIR=$(dirname "$PKG")
+            fi
+
+            SCHEME="${XCODE_SCHEME:-}"
+            if [ -z "$SCHEME" ]; then
+              if [ -n "$PROJECT" ]; then
+                LIST=$(xcodebuild -list -json -project "$PROJECT")
+              elif [ -n "$WORKSPACE" ]; then
+                LIST=$(xcodebuild -list -json -workspace "$WORKSPACE")
+              else
+                LIST=$(cd "$PACKAGE_DIR" && xcodebuild -list -json)
+              fi
+              SCHEME=$(echo "$LIST" | jq -r '(.project.schemes // .workspace.schemes // []) | map(select(test("Tests$|^Pods-") | not)) | .[0] // empty')
+            fi
+
+            BUILD_ARGS=(
+              -scheme "$SCHEME"
+              -configuration Release
+              -sdk iphoneos
+              -destination 'generic/platform=iOS'
+              -derivedDataPath "$ROOT/build/derived"
+              CODE_SIGNING_ALLOWED=NO
+              CODE_SIGNING_REQUIRED=NO
+              CODE_SIGN_IDENTITY=""
+            )
+
+            if [ -n "$WORKSPACE" ]; then
+              xcodebuild build -workspace "$WORKSPACE" "${BUILD_ARGS[@]}"
+            elif [ -n "$PROJECT" ]; then
+              xcodebuild build -project "$PROJECT" "${BUILD_ARGS[@]}"
+            else
+              (cd "$PACKAGE_DIR" && xcodebuild build "${BUILD_ARGS[@]}")
+            fi
+
+            APP_PATH=$(find "$ROOT/build/derived/Build/Products" -maxdepth 2 -name "*.app" -path "*iphoneos*" | head -1 || true)
+          fi
+
+          if [ -z "$APP_PATH" ]; then
+            exit 1
+          fi
+
+          APP_NAME=$(basename "$APP_PATH" .app)
+          IPA_NAME="$APP_NAME"
+          if [ -f "$ROOT/.zip_name" ]; then
+            ZB=$(basename "$(cat "$ROOT/.zip_name")" .zip | sed 's/[^A-Za-z0-9._-]/_/g')
+            IPA_NAME="${APP_NAME}-${ZB}"
+          fi
+
+          TMP="$ROOT/ipa_tmp"
+          rm -rf "$TMP"
+          mkdir -p "$TMP/Payload"
+          cp -R "$APP_PATH" "$TMP/Payload/"
+          (cd "$TMP" && zip -qry "$ROOT/build/ipa/${IPA_NAME}.ipa" Payload)
+          rm -rf "$TMP"
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-ipa
+          path: build/ipa/*.ipa
+          if-no-files-found: error
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: build/*.log
+          if-no-files-found: ignore
