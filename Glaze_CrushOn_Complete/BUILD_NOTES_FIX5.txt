@@ -1,0 +1,23 @@
+Glaze combined catalog follow-up fixes
+
+1. Engagement badges
+   - Catalog cards now show message count when available, otherwise chat count.
+   - This makes provider metrics such as Chub chat counts appear in the combined/trending grid.
+   - Janny normalization now accepts multiple public engagement field spellings when present.
+
+2. Female vs Female POV
+   - SpicyChat tag matching now normalizes tag spelling/case.
+   - Selecting Female excludes FemalePOV-tagged rows unless Female POV itself is explicitly selected.
+   - This prevents a Female POV tag from being treated as a Female character match.
+
+3. Authentication sheets
+   - Chub, JanitorAI, and SpicyChat auth sheets now have a separate Back button and Close button.
+   - Back navigates the embedded site when browser history exists; Close is the only action that dismisses the sheet.
+   - Chub's signup/onboarding routes no longer close the sheet just because URQL_TOKEN exists.
+   - JanitorAI signup/register/onboarding/verification/auth routes are excluded from auto-close, and completion requires a real profile username.
+   - SpicyChat signup/register/onboarding/verification/auth routes are excluded from auto-close.
+   - JanitorAI also polls for completion so finishing onboarding without a new navigation event still closes once the account is actually ready.
+
+4. DataCat account/verification sheets already use SheetView's explicit Back action and were left unchanged.
+
+Build note: Flutter/Dart/Xcode are not installed in this environment, so this source archive was not compiled here. Static delimiter checks passed on the modified Dart files.

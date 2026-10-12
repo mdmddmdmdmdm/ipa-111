@@ -1,0 +1,2081 @@
+import 'dart:async';
+
+import 'package:easy_localization/easy_localization.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../core/llm/tokenizer.dart';
+import '../../core/models/preset.dart';
+import '../../core/models/preset_block_groups.dart';
+import '../../core/models/preset_folder.dart';
+import '../../core/services/featured_presets.dart';
+import '../../core/services/preset_defaults.dart';
+import '../../core/state/db_provider.dart';
+import '../../core/utils/id_generator.dart';
+import '../../core/utils/time_helpers.dart';
+import '../../shared/shell/desktop/desktop_floating_provider.dart';
+import '../../shared/shell/desktop/desktop_layout_provider.dart';
+import '../../shared/theme/app_colors.dart';
+import '../../shared/widgets/glass_surface.dart';
+import '../../shared/widgets/glaze_bottom_sheet.dart';
+import '../../shared/widgets/glaze_scaffold.dart';
+import '../../shared/widgets/glaze_toast.dart';
+import '../../shared/widgets/folder_name_dialog.dart';
+import '../../shared/widgets/generic_editor.dart';
+import '../../shared/widgets/help_tip.dart';
+import '../../shared/widgets/sheet_view.dart';
+import 'preset_cover_service.dart';
+import 'preset_deletion.dart';
+import 'preset_image.dart';
+import 'preset_list_provider.dart';
+import 'preset_export.dart';
+import '../studio/widgets/studio_preset_options_sheet.dart';
+import 'widgets/preset_block_group_row.dart';
+import 'widgets/preset_block_row.dart';
+import 'widgets/preset_dashboard_card.dart';
+import 'widgets/preset_options_sheet.dart';
+import '../../core/state/summary_providers.dart';
+import '../chat/chat_provider.dart';
+import '../settings/app_settings_provider.dart';
+import '../chat/widgets/authors_note_sheet.dart';
+import '../chat/widgets/memory_sheet.dart';
+import '../regex/regex_sheet.dart';
+import '../../shared/widgets/glaze_sheet.dart';
+
+/// The two buttons that act on the prompt block whose editor is open, handed
+/// to whichever chrome is hosting [PresetEditorBody] so it can draw them in its
+/// header. Stash used to sit in the block's row on the dashboard — one more
+/// control in a row that already carries a drag handle, an edit pencil and a
+/// switch — and Delete was a full-width red bar pinned under the editor. Both
+/// act on the one block being edited, so both belong to that editor's header.
+class PresetBlockEditorActions {
+  /// Puts the block away (or takes it back out, when it was opened from the
+  /// stash) and returns to the block list, the way [onDelete] does.
+  final VoidCallback onStash;
+  final VoidCallback onDelete;
+
+  /// Whether the open block is currently stashed — decides which way the
+  /// button points.
+  final bool stashed;
+
+  const PresetBlockEditorActions({
+    required this.onStash,
+    required this.onDelete,
+    required this.stashed,
+  });
+
+  IconData get stashIcon =>
+      stashed ? Icons.unarchive_outlined : Icons.archive_outlined;
+
+  String get stashTooltip =>
+      stashed ? 'action_unstash'.tr() : 'action_stash'.tr();
+}
+
+/// [PresetBlockEditorActions] as [GlazeScaffold] takes them.
+List<Widget> presetBlockEditorHeaderActions(
+  BuildContext context,
+  PresetBlockEditorActions actions,
+) {
+  return [
+    IconButton(
+      icon: Icon(actions.stashIcon, size: 20),
+      tooltip: actions.stashTooltip,
+      color: context.cs.onSurfaceVariant,
+      onPressed: actions.onStash,
+    ),
+    IconButton(
+      icon: const Icon(Icons.delete_outline, size: 20),
+      tooltip: 'action_delete'.tr(),
+      color: context.cs.error,
+      onPressed: actions.onDelete,
+    ),
+  ];
+}
+
+/// The same two buttons as [SheetView] takes them.
+List<SheetViewAction> presetBlockEditorSheetActions(
+  BuildContext context,
+  PresetBlockEditorActions actions,
+) {
+  return [
+    SheetViewAction(
+      icon: Icon(actions.stashIcon, size: 20),
+      tooltip: actions.stashTooltip,
+      color: context.cs.onSurfaceVariant,
+      onPressed: actions.onStash,
+    ),
+    SheetViewAction(
+      icon: const Icon(Icons.delete_outline, size: 20),
+      tooltip: 'action_delete'.tr(),
+      color: context.cs.error,
+      onPressed: actions.onDelete,
+    ),
+  ];
+}
+
+/// Standalone screen wrapper around [PresetEditorBody].
+class PresetEditorScreen extends StatefulWidget {
+  final Preset? preset;
+  final String? charId;
+  const PresetEditorScreen({super.key, this.preset, this.charId});
+
+  @override
+  State<PresetEditorScreen> createState() => _PresetEditorScreenState();
+}
+
+class _PresetEditorScreenState extends State<PresetEditorScreen> {
+  final _editorKey = GlobalKey<PresetEditorBodyState>();
+
+  /// Header buttons for the block editor, while one is open.
+  PresetBlockEditorActions? _blockActions;
+
+  void _onBack() {
+    final handled = _editorKey.currentState?.handleBack() ?? false;
+    if (!handled) {
+      if (mounted) Navigator.of(context).pop();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        _onBack();
+      },
+      child: GlazeScaffold(
+        title: widget.preset != null ? 'Edit Preset' : 'New Preset',
+        onBack: _onBack,
+        actions: _blockActions == null
+            ? null
+            : presetBlockEditorHeaderActions(context, _blockActions!),
+        body: MediaQuery.removePadding(
+          context: context,
+          removeTop: true,
+          child: PresetEditorBody(
+            key: _editorKey,
+            preset: widget.preset,
+            charId: widget.charId,
+            onDeleted: () => Navigator.of(context).pop(),
+            onBlockEditorChanged: (actions) =>
+                setState(() => _blockActions = actions),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Embeddable preset editor body — no scaffold, no navigation chrome.
+/// Expose [PresetEditorBodyState.save] via a [GlobalKey] to trigger save
+/// from an outer widget (e.g. a [SheetView] header action).
+class PresetEditorBody extends ConsumerStatefulWidget {
+  final Preset? preset;
+
+  /// Active chat used to edit the session-scoped Author's Note block. Null when
+  /// the editor is opened outside a chat (the note editor then shows a hint).
+  final String? charId;
+  final VoidCallback? onDeleted;
+
+  /// Fires with the header buttons for the block whose editor just opened, and
+  /// with null when it closes. A host that draws its own chrome renders them;
+  /// one that ignores this simply shows no block actions.
+  final ValueChanged<PresetBlockEditorActions?>? onBlockEditorChanged;
+
+  const PresetEditorBody({
+    super.key,
+    this.preset,
+    this.charId,
+    this.onDeleted,
+    this.onBlockEditorChanged,
+  });
+
+  @override
+  ConsumerState<PresetEditorBody> createState() => PresetEditorBodyState();
+}
+
+class PresetEditorBodyState extends ConsumerState<PresetEditorBody> {
+  /// The editors block windows were opened from, by preset id, for those
+  /// windows to reach (see [PresetBlockEditorWindow]).
+  static final Map<String, PresetEditorBodyState> _mounted = {};
+
+  /// Cached for [dispose], where reading `ref` is unsafe. Set once a block
+  /// window has been opened from here.
+  DesktopWindowsNotifier? _windows;
+
+  late final _nameCtrl = TextEditingController(text: widget.preset?.name ?? '');
+  late String _author = widget.preset?.author ?? '';
+  late String? _imagePath = widget.preset?.imagePath;
+  late List<PresetBlock> _blocks;
+  late List<PresetBlockFolder> _blockFolders;
+  late List<PresetRegex> _regexes;
+  late bool _parseInlineReasoning = widget.preset?.reasoningEnabled ?? false;
+  // Read from the preset on every save before, which is the same thing as
+  // being uneditable: the Guided Generation block is the one mandatory block
+  // whose prompt lives on the preset rather than in `block.content`, and no
+  // screen offered a field for it. Held here so the block's editor can change
+  // it, the way the Vue editor always could.
+  late String? _guidedGenerationPrompt = widget.preset?.guidedGenerationPrompt;
+  late String? _guidedImpersonationPrompt =
+      widget.preset?.guidedImpersonationPrompt;
+  late final _reasoningStartCtrl = TextEditingController(
+    text: widget.preset?.reasoningStart ?? '',
+  );
+  late final _reasoningEndCtrl = TextEditingController(
+    text: widget.preset?.reasoningEnd ?? '',
+  );
+  late final _impersonationPromptCtrl = TextEditingController(
+    text: widget.preset?.impersonationPrompt ?? '',
+  );
+  bool _showAdvanced = false;
+  int? _expandedBlockIndex;
+
+  double? _savedScrollOffset;
+  late final ScrollController _scrollController = ScrollController();
+
+  Timer? _saveTimer;
+  late final String _currentId = widget.preset?.id ?? generateId();
+  late final int _createdAt =
+      widget.preset?.createdAt ?? currentTimestampSeconds();
+
+  /// Bundled featured presets ship with a fixed author and cover image — both
+  /// are read-only here. Cloning one produces a normal, fully editable preset.
+  bool get _isFeatured => isFeaturedPreset(widget.preset?.id);
+
+  @override
+  void initState() {
+    super.initState();
+    _blocks = List.from(widget.preset?.blocks ?? defaultPresetBlocks());
+    _blockFolders = List.from(widget.preset?.blockFolders ?? const []);
+    _regexes = List.from(widget.preset?.regexes ?? []);
+    _reconcileAuthorsNoteEnabled();
+    _reconcileSummaryEnabled();
+
+    _nameCtrl.addListener(_scheduleSave);
+    _reasoningStartCtrl.addListener(_scheduleSave);
+    _reasoningEndCtrl.addListener(_scheduleSave);
+    _impersonationPromptCtrl.addListener(_scheduleSave);
+  }
+
+  @override
+  void deactivate() {
+    // Flush a pending debounced save while the widget is still mounted (ref
+    // valid). dispose() runs the same flush, but by then this ConsumerState is
+    // unmounting and ref.read is unsafe, so a save deferred to dispose can
+    // silently fail (the last <500 ms edit before back would be lost). Mirrors
+    // ApiSettingsScreen / RegexSheet.
+    if (_saveTimer != null && _saveTimer!.isActive) {
+      _saveTimer!.cancel();
+      _performSave();
+    }
+    super.deactivate();
+  }
+
+  @override
+  void dispose() {
+    if (_saveTimer != null && _saveTimer!.isActive) {
+      _saveTimer!.cancel();
+      _performSave();
+    }
+    if (identical(_mounted[_currentId], this)) _mounted.remove(_currentId);
+    // Its block windows have nothing left to edit. Deferred: the window list
+    // is a provider, which cannot change while the tree is being torn down.
+    final presetId = _currentId;
+    final windows = _windows;
+    if (windows != null) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => windows.closeWhere(
+          (w) => w.stack.any((view) => _blockWindowPreset(view) == presetId),
+        ),
+      );
+    }
+    _nameCtrl.dispose();
+    _reasoningStartCtrl.dispose();
+    _reasoningEndCtrl.dispose();
+    _impersonationPromptCtrl.dispose();
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _scheduleSave() {
+    _saveTimer?.cancel();
+    _saveTimer = Timer(const Duration(milliseconds: 500), _performSave);
+  }
+
+  Future<void> _performSave() async {
+    final name = _nameCtrl.text.trim().isEmpty
+        ? 'New Preset'
+        : _nameCtrl.text.trim();
+    final presetToSave = Preset(
+      id: _currentId,
+      name: name,
+      author: _author.trim().isEmpty ? null : _author.trim(),
+      imagePath: _imagePath,
+      blocks: _blocks,
+      blockFolders: _blockFolders,
+      regexes: _regexes,
+      reasoningEnabled: _parseInlineReasoning,
+      reasoningStart: _parseInlineReasoning ? _reasoningStartCtrl.text : null,
+      reasoningEnd: _parseInlineReasoning ? _reasoningEndCtrl.text : null,
+      guidedGenerationPrompt: _guidedGenerationPrompt,
+      guidedImpersonationPrompt: _guidedImpersonationPrompt,
+      impersonationPrompt: _impersonationPromptCtrl.text.trim().isEmpty
+          ? null
+          : _impersonationPromptCtrl.text,
+      summaryPrompt: widget.preset?.summaryPrompt,
+      createdAt: _createdAt,
+    );
+    await ref.read(presetListProvider.notifier).updatePreset(presetToSave);
+  }
+
+  bool handleBack() {
+    if (_expandedBlockIndex != null) {
+      _closeBlockEditor();
+      return true;
+    }
+    return false;
+  }
+
+  void _openBlockEditor(int index) {
+    // On desktop the block opens in a window of its own beside the block
+    // list, rather than in its place.
+    if (isDesktopLayout(context)) {
+      _openBlockEditorWindow(_blocks[index]);
+      return;
+    }
+    _saveScrollOffset();
+    setState(() => _expandedBlockIndex = index);
+    _publishBlockEditorActions();
+  }
+
+  /// The desktop block editor: a floating window, so the rest of the app stays
+  /// usable and several blocks can be open side by side (opening one already
+  /// open brings its window to the front).
+  ///
+  /// Floating windows sit under anything pushed over the whole app, so a
+  /// preset editor in such a route — the chat's preset sheet or editor page —
+  /// opens it as a sheet window over itself instead.
+  void _openBlockEditorWindow(PresetBlock block) {
+    final view = Uri(
+      path: 'preset-block',
+      queryParameters: {'preset': _currentId, 'block': block.id},
+    ).toString();
+    _mounted[_currentId] = this;
+    _windows ??= ref.read(desktopWindowsProvider.notifier);
+    if (floatingWindowsVisibleFrom(context) && floatOnDesktop(context, view)) {
+      return;
+    }
+    unawaited(
+      showGlazeSheet<void>(
+        context: context,
+        useRootNavigator: true,
+        builder: (sheetContext) => _blockEditorView(
+          sheetContext,
+          block,
+          close: () => Navigator.of(sheetContext).pop(),
+        ),
+      ),
+    );
+  }
+
+  /// [block]'s editor in a window: its title bar carries the block's name and
+  /// the stash and delete buttons a phone gets in the host's header. Edits land
+  /// on the block list as they are made, so its row follows along.
+  Widget _blockEditorView(
+    BuildContext context,
+    PresetBlock block, {
+    required VoidCallback close,
+  }) {
+    return SheetView(
+      title: block.name,
+      actions: block.isStatic
+          ? const []
+          : presetBlockEditorSheetActions(
+              context,
+              PresetBlockEditorActions(
+                stashed: block.isStashed,
+                onStash: () {
+                  close();
+                  if (block.isStashed) {
+                    _unstashBlock(block.id);
+                  } else {
+                    _stashBlock(block.id);
+                  }
+                },
+                onDelete: () {
+                  close();
+                  _deleteBlock(block.id);
+                },
+              ),
+            ),
+      body: _blockEditor(block),
+    );
+  }
+
+  void _deleteBlock(String blockId) {
+    if (!mounted) return;
+    setState(() => _blocks.removeWhere((b) => b.id == blockId));
+    _scheduleSave();
+  }
+
+  void _closeBlockEditor() {
+    _saveScrollOffset();
+    setState(() => _expandedBlockIndex = null);
+    _publishBlockEditorActions();
+    _restoreScrollAfterFrame();
+  }
+
+  /// Hand the host the header buttons for the block being edited, or null once
+  /// the editor is closed. Author's Note and Summary are static blocks — they
+  /// cannot be stashed or deleted — so their editors carry no actions.
+  void _publishBlockEditorActions() {
+    final notify = widget.onBlockEditorChanged;
+    if (notify == null) return;
+    final index = _expandedBlockIndex;
+    if (index == null || _blocks[index].isStatic) {
+      notify(null);
+      return;
+    }
+    final block = _blocks[index];
+    notify(
+      PresetBlockEditorActions(
+        stashed: block.isStashed,
+        onStash: () {
+          _closeBlockEditor();
+          if (block.isStashed) {
+            _unstashBlock(block.id);
+          } else {
+            _stashBlock(block.id);
+          }
+        },
+        onDelete: _deleteExpandedBlock,
+      ),
+    );
+  }
+
+  void _deleteExpandedBlock() {
+    final index = _expandedBlockIndex;
+    if (index == null) return;
+    _saveScrollOffset();
+    setState(() {
+      _blocks.removeAt(index);
+      _expandedBlockIndex = null;
+    });
+    _publishBlockEditorActions();
+    _restoreScrollAfterFrame();
+    _scheduleSave();
+  }
+
+  void _saveScrollOffset() {
+    if (_scrollController.hasClients) {
+      _savedScrollOffset = _scrollController.offset;
+    }
+  }
+
+  void _restoreScrollAfterFrame() {
+    if (_savedScrollOffset == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted &&
+          _savedScrollOffset != null &&
+          _scrollController.hasClients) {
+        final target = _savedScrollOffset!.clamp(
+          0.0,
+          _scrollController.position.maxScrollExtent,
+        );
+        _scrollController.jumpTo(target);
+        _savedScrollOffset = null;
+      }
+    });
+  }
+
+  /// The editor for [block]. Its edits are written back by the block's id, so
+  /// they land on the right block wherever the editor is shown.
+  Widget _blockEditor(PresetBlock block) {
+    void replace(PresetBlock updated, [void Function()? alsoSet]) {
+      if (!mounted) return;
+      final index = _blocks.indexWhere((b) => b.id == block.id);
+      if (index == -1) return;
+      setState(() {
+        _blocks[index] = updated;
+        alsoSet?.call();
+      });
+      _scheduleSave();
+    }
+
+    // Author's Note edits per-preset role/depth/insertion here; its content
+    // (session-scoped) is shown and edited via the linked chat note sheet.
+    if (block.id == 'authors_note') {
+      return _AuthorsNoteBlockEditor(
+        key: ValueKey(block.id),
+        block: block,
+        charId: widget.charId,
+        presetId: widget.preset?.id,
+        onSave: replace,
+      );
+    }
+    // Guided Generation: the block is always enabled and its text is two
+    // preset-level prompts, so it gets the same treatment as the other
+    // blocks whose content is not in `block.content`.
+    if (block.id == 'guided_generation') {
+      return _GuidedGenerationBlockEditor(
+        key: ValueKey(block.id),
+        block: block,
+        generationPrompt:
+            _guidedGenerationPrompt ?? kDefaultGuidedGenerationPrompt,
+        impersonationPrompt:
+            _guidedImpersonationPrompt ?? kDefaultGuidedImpersonationPrompt,
+        onSave: (updated, generation, impersonation) => replace(updated, () {
+          _guidedGenerationPrompt = generation;
+          _guidedImpersonationPrompt = impersonation;
+        }),
+      );
+    }
+    // Summary: per-preset role/depth/insertion/prefix here; content (session-
+    // scoped, in the summary repo) is shown and edited via the chat sheet.
+    if (block.id == 'summary') {
+      return _SummaryBlockEditor(
+        key: ValueKey(block.id),
+        block: block,
+        charId: widget.charId,
+        onSave: replace,
+      );
+    }
+    return _BlockEditorInline(
+      key: ValueKey(block.id),
+      block: block,
+      onSave: replace,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_expandedBlockIndex != null) {
+      return _blockEditor(_blocks[_expandedBlockIndex!]);
+    }
+
+    return SingleChildScrollView(
+      controller: _scrollController,
+      key: const ValueKey('dashboard'),
+      padding: EdgeInsets.only(
+        top: MediaQuery.paddingOf(context).top,
+        bottom:
+            MediaQuery.paddingOf(context).bottom +
+            MediaQuery.viewInsetsOf(context).bottom,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _buildDashboard(),
+          _buildAdvancedToggle(),
+          if (_showAdvanced) _buildAdvancedPanel(),
+          const SizedBox(height: 60),
+        ],
+      ),
+    );
+  }
+
+  // ─── Dashboard card ──────────────────────────────────────────────────────
+
+  Widget _buildDashboard() {
+    final displayName = _nameCtrl.text.trim().isEmpty
+        ? 'New Preset'
+        : _nameCtrl.text.trim();
+    final addBlockAtTop =
+        ref.watch(appSettingsProvider).value?.addBlockAtTop ?? false;
+    final cover = resolvePresetCoverImage(
+      presetId: _currentId,
+      imagePath: _imagePath,
+    );
+
+    final activeBlocks = _activeBlocks;
+    final stashedCount = _blocks.length - activeBlocks.length;
+    // A disabled folder takes its blocks out of the prompt, so they must not
+    // be counted either.
+    final tokens = applyPresetFolderEnablement(activeBlocks, _blockFolders)
+        .where((b) => b.enabled && b.content.isNotEmpty)
+        .fold(0, (sum, b) => sum + estimateTokens(b.content));
+
+    final onCover = cover != null;
+
+    return PresetDashboardCard(
+      coverImage: cover,
+      onCoverTap: _isFeatured ? null : _pickImage,
+      title: displayName,
+      subtitle: _author.isNotEmpty ? 'by $_author' : null,
+      onTitleTap: _showRenameDialog,
+      onMenuTap: _showOptionsMenu,
+      utilsLeading: [
+        PresetUtilButton(
+          icon: Icons.archive_outlined,
+          count: stashedCount,
+          onTap: _showStashSheet,
+          onCover: onCover,
+        ),
+        // The count bubbles overhang each button (top/right by 4), so the two
+        // buttons need a gap or the first button's bubble sits on the second.
+        const SizedBox(width: 8),
+        PresetUtilButton(
+          icon: Icons.code,
+          count: _regexes.length,
+          onTap: _showRegexSheet,
+          onCover: onCover,
+        ),
+      ],
+      utilsTrailing: [
+        PresetStatBadge(
+          icon: Icons.description,
+          label: '${tokens}t',
+          onCover: onCover,
+        ),
+      ],
+      // Add block row position follows the app setting (top or bottom).
+      addBlockAtTop: addBlockAtTop,
+      blockList: activeBlocks.isNotEmpty ? _buildBlockList(activeBlocks) : null,
+      onAddBlock: _addBlock,
+    );
+  }
+
+  Widget _buildBlockList(List<PresetBlock> activeBlocks) {
+    final rows = groupPresetBlocks(activeBlocks, _blockFolders);
+    // The outer target catches a block dragged off its folder: dropping it
+    // anywhere but on another folder takes it out of the one it is in.
+    return DragTarget<String>(
+      onWillAcceptWithDetails: (details) =>
+          findPresetFolderForBlock(activeBlocks, _blockFolders, details.data) !=
+          null,
+      onAcceptWithDetails: (details) => _moveBlockOutOfFolder(details.data),
+      builder: (context, candidates, _) => ReorderableListView.builder(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        padding: EdgeInsets.zero,
+        buildDefaultDragHandles: false,
+        itemCount: rows.length,
+        // TODO: migrate to onReorderItem (newIndex semantics differ — see Flutter changelog).
+        // ignore: deprecated_member_use
+        onReorder: (oldIndex, newIndex) {
+          if (newIndex > oldIndex) newIndex -= 1;
+          final reordered = [...rows];
+          reordered.insert(newIndex, reordered.removeAt(oldIndex));
+          _writeActiveBlocks(flattenPresetBlockGroups(reordered));
+        },
+        itemBuilder: (_, i) => _buildBlockRow(rows, i),
+      ),
+    );
+  }
+
+  Widget _buildBlockRow(List<PresetBlockGroup> rows, int index) {
+    final row = rows[index];
+    final isLast = index == rows.length - 1;
+    if (row.isFolder) {
+      final folder = row.folder!;
+      return PresetBlockGroupRow(
+        key: ValueKey('folder_${folder.id}'),
+        group: row,
+        // An empty folder is drawn after the block rows and owns no slot in
+        // the block order, so there is nothing to drag it through.
+        dragIndex: row.children.isEmpty ? null : index,
+        isLast: isLast,
+        onToggleFolder: (enabled) => _toggleFolder(folder, enabled),
+        onOptions: () => _showFolderOptions(folder),
+      onEdit: _openBlockEditorFor,
+      onToggleBlock: _setBlockEnabled,
+        onSelectBlock: (blockId) => _selectFolderBlock(folder, blockId),
+        onStash: (block) => _stashBlock(block.id),
+        onMoveBlockIn: (blockId) => _moveBlockIntoFolder(blockId, folder),
+      );
+    }
+    final block = row.standalone!;
+    return PresetBlockRow(
+      key: ValueKey(block.id),
+      block: block,
+      index: index,
+      isLast: isLast,
+      moveDragData: _blockFolders.isEmpty ? null : block.id,
+      onEdit: () => _openBlockEditorFor(block),
+      onToggle: (enabled) => _setBlockEnabled(block, enabled),
+      onStash: block.isStatic ? null : () => _stashBlock(block.id),
+    );
+  }
+
+  // ─── Block list actions ──────────────────────────────────────────────────
+
+  List<PresetBlock> get _activeBlocks =>
+      _blocks.where((b) => !b.isStashed).toList();
+
+  /// Writes a reordered active list back into the non-stashed slots of
+  /// [_blocks], so stashed blocks keep the positions they were archived at.
+  void _writeActiveBlocks(List<PresetBlock> nextActive) {
+    if (nextActive.length != _activeBlocks.length) return;
+    setState(() {
+      var next = 0;
+      for (var i = 0; i < _blocks.length; i++) {
+        if (!_blocks[i].isStashed) _blocks[i] = nextActive[next++];
+      }
+    });
+    _scheduleSave();
+  }
+
+  void _openBlockEditorFor(PresetBlock block) {
+    final index = _blocks.indexWhere((b) => b.id == block.id);
+    if (index == -1) return;
+    _openBlockEditor(index);
+  }
+
+  void _setBlockEnabled(PresetBlock block, bool enabled) {
+    final index = _blocks.indexWhere((b) => b.id == block.id);
+    if (index == -1) return;
+    setState(() {
+      _blocks[index] = _blocks[index].copyWith(enabled: enabled);
+    });
+    _scheduleSave();
+    // Author's Note enable is one entity for the chat — mirror it onto
+    // the session note and every other preset's block.
+    if (block.id == 'authors_note') {
+      syncAuthorsNoteEnabled(ref, charId: widget.charId, enabled: enabled);
+    } else if (block.id == 'summary') {
+      syncSummaryEnabled(ref, charId: widget.charId, enabled: enabled);
+    }
+  }
+
+  void _toggleFolder(PresetBlockFolder folder, bool enabled) {
+    setState(() {
+      _blockFolders = togglePresetBlockFolder(
+        _blockFolders,
+        folder.id,
+        enabled,
+      );
+    });
+    _scheduleSave();
+  }
+
+  void _moveBlockIntoFolder(String blockId, PresetBlockFolder folder) {
+    _writeActiveBlocks(
+      movePresetBlockIntoFolder(
+        blocks: _activeBlocks,
+        blockId: blockId,
+        folder: folder,
+      ),
+    );
+  }
+
+  void _selectFolderBlock(PresetBlockFolder folder, String blockId) {
+    _writeActiveBlocks(
+      selectExclusivePresetBlock(
+        blocks: _activeBlocks,
+        folderId: folder.id,
+        blockId: blockId,
+      ),
+    );
+  }
+
+  /// Rename, selection mode and delete for one folder.
+  void _showFolderOptions(PresetBlockFolder folder) {
+    GlazeBottomSheet.show<void>(
+      context,
+      title: folder.name,
+      items: [
+        BottomSheetItem(
+          icon: Icons.edit_outlined,
+          label: 'action_rename'.tr(),
+          onTap: () {
+            Navigator.of(context, rootNavigator: true).pop();
+            _renameFolder(folder);
+          },
+        ),
+        BottomSheetItem(
+          icon: folder.exclusive ? Icons.checklist : Icons.radio_button_checked,
+          label: folder.exclusive
+              ? 'preset_folder_mode_checklist'.tr()
+              : 'preset_folder_mode_pick_one'.tr(),
+          hint: folder.exclusive
+              ? null
+              : 'preset_folder_mode_pick_one_hint'.tr(),
+          onTap: () {
+            Navigator.of(context, rootNavigator: true).pop();
+            _setFolderExclusive(folder, !folder.exclusive);
+          },
+        ),
+        BottomSheetItem(
+          icon: Icons.delete_outline,
+          label: 'action_delete'.tr(),
+          isDestructive: true,
+          onTap: () {
+            Navigator.of(context, rootNavigator: true).pop();
+            unawaited(_deleteFolder(folder));
+          },
+        ),
+      ],
+    );
+  }
+
+  void _setFolderExclusive(PresetBlockFolder folder, bool exclusive) {
+    final next = setPresetFolderExclusive(
+      folders: _blockFolders,
+      blocks: _blocks,
+      folderId: folder.id,
+      exclusive: exclusive,
+    );
+    setState(() {
+      _blockFolders = next.folders;
+      _blocks = List.of(next.blocks);
+    });
+    _scheduleSave();
+  }
+
+  void _moveBlockOutOfFolder(String blockId) {
+    _writeActiveBlocks(
+      movePresetBlockOutOfFolder(blocks: _activeBlocks, blockId: blockId),
+    );
+  }
+
+  void _renameFolder(PresetBlockFolder folder) {
+    GlazeBottomSheet.show<void>(
+      context,
+      title: 'folder_rename_title'.tr(),
+      child: FolderNameDialog(
+        initialName: folder.name,
+        confirmLabel: 'action_rename'.tr(),
+        onSubmit: (name) {
+          setState(() {
+            _blockFolders = renamePresetBlockFolder(
+              _blockFolders,
+              folder.id,
+              name,
+            );
+          });
+          _scheduleSave();
+        },
+      ),
+    );
+  }
+
+  Future<void> _deleteFolder(PresetBlockFolder folder) async {
+    final confirmed = await confirmStudioDelete(
+      context,
+      title: 'folder_delete_title'.tr(),
+      description: 'preset_block_folder_delete_confirm'.tr(args: [folder.name]),
+    );
+    if (!confirmed || !mounted) return;
+    setState(() {
+      _blocks = clearPresetFolderMembership(_blocks, folder.id);
+      _blockFolders = _blockFolders
+          .where((f) => f.id != folder.id)
+          .toList(growable: false);
+    });
+    _scheduleSave();
+  }
+
+  /// Which kind of folder to create — the two the agentic editor has: a
+  /// checklist, or a pick-one where the blocks become radio options.
+  void _chooseFolderKind() {
+    GlazeBottomSheet.show<void>(
+      context,
+      title: 'folder_create_title'.tr(),
+      items: [
+        BottomSheetItem(
+          icon: Icons.checklist,
+          label: 'preset_folder_mode_checklist'.tr(),
+          hint: 'preset_folder_mode_checklist_hint'.tr(),
+          onTap: () {
+            Navigator.of(context, rootNavigator: true).pop();
+            _nameAndCreateFolder(exclusive: false);
+          },
+        ),
+        BottomSheetItem(
+          icon: Icons.radio_button_checked,
+          label: 'preset_folder_mode_pick_one'.tr(),
+          hint: 'preset_folder_mode_pick_one_hint'.tr(),
+          onTap: () {
+            Navigator.of(context, rootNavigator: true).pop();
+            _nameAndCreateFolder(exclusive: true);
+          },
+        ),
+      ],
+    );
+  }
+
+  void _nameAndCreateFolder({required bool exclusive}) {
+    GlazeBottomSheet.show<void>(
+      context,
+      title: 'folder_create_title'.tr(),
+      child: FolderNameDialog(
+        confirmLabel: 'action_create'.tr(),
+        onSubmit: (name) => _createFolder(name, exclusive: exclusive),
+      ),
+    );
+  }
+
+  /// A folder is metadata on the preset, not a block: creating one adds no
+  /// prompt text and changes nothing about what is sent until blocks are
+  /// dragged into it.
+  void _createFolder(String name, {required bool exclusive}) {
+    setState(() {
+      _blockFolders = [
+        ..._blockFolders,
+        PresetBlockFolder(
+          id: generateId(),
+          name: name.trim(),
+          exclusive: exclusive,
+        ),
+      ];
+    });
+    _scheduleSave();
+  }
+
+  // ─── Advanced settings ───────────────────────────────────────────────────
+
+  Widget _buildAdvancedToggle() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+      child: GlassSurface(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => setState(() => _showAdvanced = !_showAdvanced),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          child: Row(
+            children: [
+              Text(
+                'section_advanced_settings'.tr(),
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: context.cs.onSurfaceVariant,
+                ),
+              ),
+              const Spacer(),
+              AnimatedRotation(
+                turns: _showAdvanced ? 0.5 : 0,
+                duration: const Duration(milliseconds: 300),
+                child: Icon(
+                  Icons.expand_more,
+                  color: context.cs.onSurfaceVariant,
+                  size: 20,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAdvancedPanel() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: GlassSurface(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: context.cs.outline),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const _SectionLabel('Reasoning', helpTerm: 'preset-reasoning'),
+              const SizedBox(height: 8),
+              _SettingsToggle(
+                label: 'label_parse_inline_reasoning'.tr(),
+                description: 'desc_parse_inline_reasoning'.tr(),
+                value: _parseInlineReasoning,
+                helpTerm: 'preset-reasoning-inline',
+                onChanged: (v) {
+                  setState(() => _parseInlineReasoning = v);
+                  _scheduleSave();
+                },
+              ),
+              if (_parseInlineReasoning) ...[
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _reasoningStartCtrl,
+                        style: TextStyle(color: context.cs.onSurface),
+                        decoration: _inputDecoration('<think>'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextField(
+                        controller: _reasoningEndCtrl,
+                        style: TextStyle(color: context.cs.onSurface),
+                        decoration: _inputDecoration('</think>'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+              const SizedBox(height: 20),
+              _SectionLabel('section_impersonation'.tr()),
+              const SizedBox(height: 8),
+              Text(
+                'preset_impersonation_desc'.tr(),
+                style: TextStyle(
+                  color: context.cs.onSurfaceVariant,
+                  fontSize: 12,
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _impersonationPromptCtrl,
+                style: TextStyle(color: context.cs.onSurface),
+                minLines: 2,
+                maxLines: 5,
+                decoration: _inputDecoration(
+                  '[Write {{user}}\'s next message.]',
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ─── Author's Note (content session-scoped; role/depth per-preset) ────────
+
+  /// On open, make the local authors_note block enable mirror the session note
+  /// (the note's on/off is one entity for the chat). Persisted via [_scheduleSave].
+  void _reconcileAuthorsNoteEnabled() {
+    final charId = widget.charId;
+    if (charId == null) return;
+    final note = ref.read(chatProvider(charId)).value?.session?.authorsNote;
+    if (note == null) return;
+    final idx = _blocks.indexWhere((b) => b.id == 'authors_note');
+    if (idx == -1 || _blocks[idx].enabled == note.enabled) return;
+    _blocks[idx] = _blocks[idx].copyWith(enabled: note.enabled);
+    _scheduleSave();
+  }
+
+  /// Summary enable is session-scoped and mirrored onto every preset's block.
+  /// On open, sync the local block with the current chat summary flag.
+  void _reconcileSummaryEnabled() {
+    final charId = widget.charId;
+    if (charId == null) return;
+    final session = ref.read(chatProvider(charId)).value?.session;
+    if (session == null) return;
+    final idx = _blocks.indexWhere((b) => b.id == 'summary');
+    if (idx == -1) return;
+    ref.read(summaryEnabledProvider(session.id).future).then((enabled) {
+      if (!mounted || _blocks[idx].enabled == enabled) return;
+      setState(() {
+        _blocks[idx] = _blocks[idx].copyWith(enabled: enabled);
+      });
+      _scheduleSave();
+    });
+  }
+
+  // ─── Actions ─────────────────────────────────────────────────────────────
+
+  void _stashBlock(String blockId) {
+    final index = _blocks.indexWhere((b) => b.id == blockId);
+    if (index == -1 || _blocks[index].isStatic) return;
+    setState(() {
+      _blocks[index] = _blocks[index].copyWith(isStashed: true);
+    });
+    _scheduleSave();
+  }
+
+  void _unstashBlock(String blockId) {
+    final index = _blocks.indexWhere((b) => b.id == blockId);
+    if (index == -1) return;
+    final atTop = ref.read(appSettingsProvider).value?.addBlockAtTop ?? false;
+    setState(() {
+      final block = _blocks.removeAt(index).copyWith(isStashed: false);
+      if (atTop) {
+        _blocks.insert(0, block);
+      } else {
+        _blocks.add(block);
+      }
+    });
+    _scheduleSave();
+  }
+
+  void _showStashSheet() {
+    final stashed = _blocks.where((b) => b.isStashed).toList();
+    GlazeBottomSheet.show<void>(
+      context,
+      title: 'stash'.tr(),
+      items: stashed.isEmpty
+          ? [
+              BottomSheetItem(
+                label: 'stash_empty'.tr(),
+                centered: true,
+                onTap: () => Navigator.of(context, rootNavigator: true).pop(),
+              ),
+            ]
+          : [
+              for (final block in stashed)
+                BottomSheetItem(
+                  icon: presetBlockRoleIcon(block.role),
+                  label: block.name,
+                  hint: block.enabled ? null : 'Disabled',
+                  onTap: () {
+                    Navigator.of(context, rootNavigator: true).pop();
+                    final index = _blocks.indexWhere((b) => b.id == block.id);
+                    if (index == -1) return;
+                    _openBlockEditor(index);
+                  },
+                  actions: [
+                    BottomSheetAction(
+                      icon: Icons.unarchive_outlined,
+                      onTap: () {
+                        Navigator.of(context, rootNavigator: true).pop();
+                        _unstashBlock(block.id);
+                      },
+                    ),
+                    BottomSheetAction(
+                      icon: Icons.delete_outline,
+                      color: context.cs.error,
+                      onTap: () {
+                        Navigator.of(context, rootNavigator: true).pop();
+                        setState(
+                          () => _blocks.removeWhere((b) => b.id == block.id),
+                        );
+                        _scheduleSave();
+                      },
+                    ),
+                  ],
+                ),
+            ],
+    );
+  }
+
+  void _addBlock() {
+    final hasMemoryBlock = _blocks.any((b) => b.id == 'memory');
+    GlazeBottomSheet.show<void>(
+      context,
+      title: 'add_block'.tr(),
+      items: [
+        if (!hasMemoryBlock)
+          BottomSheetItem(
+            icon: Icons.psychology_alt_outlined,
+            label: 'label_memory_book'.tr(),
+            onTap: () {
+              Navigator.of(context, rootNavigator: true).pop();
+              _addMemoryBlock();
+            },
+          ),
+        BottomSheetItem(
+          icon: Icons.add,
+          label: 'label_custom_block'.tr(),
+          onTap: () {
+            Navigator.of(context, rootNavigator: true).pop();
+            _addCustomBlock();
+          },
+        ),
+        BottomSheetItem(
+          icon: Icons.create_new_folder_outlined,
+          label: 'folder_new'.tr(),
+          onTap: () {
+            Navigator.of(context, rootNavigator: true).pop();
+            _chooseFolderKind();
+          },
+        ),
+        BottomSheetItem(
+          icon: Icons.content_copy_outlined,
+          label: 'action_copy_from_preset'.tr(),
+          onTap: () {
+            Navigator.of(context, rootNavigator: true).pop();
+            _openCopyBlockPresetPicker();
+          },
+        ),
+      ],
+    );
+  }
+
+  /// Step 1 of "Copy from Preset": pick which preset to copy a block from.
+  void _openCopyBlockPresetPicker() {
+    final presets = ref.read(presetListProvider).value ?? const <Preset>[];
+    if (presets.isEmpty) return;
+    GlazeBottomSheet.show<void>(
+      context,
+      title: 'action_select_preset'.tr(),
+      cardItems: [
+        for (final preset in presets)
+          BottomSheetCardItem(
+            label: preset.name.isEmpty ? 'Default' : preset.name,
+            sublabel: (preset.author?.isNotEmpty ?? false)
+                ? 'by ${preset.author}'
+                : null,
+            icon: Icons.description_outlined,
+            badge: '${_copyableBlocks(preset).length}',
+            onTap: () {
+              Navigator.of(context, rootNavigator: true).pop();
+              _openCopyBlockPicker(preset);
+            },
+          ),
+      ],
+    );
+  }
+
+  /// Step 2 of "Copy from Preset": pick which block from the chosen preset.
+  void _openCopyBlockPicker(Preset preset) {
+    final blocks = _copyableBlocks(preset);
+    if (blocks.isEmpty) {
+      GlazeBottomSheet.show<void>(
+        context,
+        title: preset.name,
+        items: [
+          BottomSheetItem(
+            label: 'label_no_blocks'.tr(),
+            centered: true,
+            onTap: () => Navigator.of(context, rootNavigator: true).pop(),
+          ),
+        ],
+      );
+      return;
+    }
+    GlazeBottomSheet.show<void>(
+      context,
+      title: 'preset_blocks_title'.tr(args: [preset.name]),
+      items: [
+        for (final block in blocks)
+          BottomSheetItem(
+            icon: presetBlockRoleIcon(block.role),
+            label: block.name,
+            onTap: () {
+              Navigator.of(context, rootNavigator: true).pop();
+              _copyBlockFromPreset(block);
+            },
+          ),
+      ],
+    );
+  }
+
+  /// Non-stashed blocks available to copy. For the preset currently being
+  /// edited, use the live in-memory blocks so unsaved edits are reflected.
+  List<PresetBlock> _copyableBlocks(Preset preset) {
+    final source = preset.id == _currentId ? _blocks : preset.blocks;
+    return source.where((block) => !block.isStashed).toList();
+  }
+
+  void _copyBlockFromPreset(PresetBlock block) {
+    final atTop = ref.read(appSettingsProvider).value?.addBlockAtTop ?? false;
+    // Deep-clone via copyWith with a fresh id; demote to a regular custom block
+    // and append " (copy)" — matching Glaze's copy-from-preset behaviour.
+    final clone = block.copyWith(
+      id: generateId(),
+      name: '${block.name} (copy)',
+      isStatic: false,
+      isStashed: false,
+    );
+    setState(() {
+      if (atTop) {
+        _blocks.insert(0, clone);
+      } else {
+        _blocks.add(clone);
+      }
+    });
+    _scheduleSave();
+  }
+
+  void _addCustomBlock() {
+    final atTop = ref.read(appSettingsProvider).value?.addBlockAtTop ?? false;
+    setState(() {
+      final block = PresetBlock(
+        id: generateId(),
+        name: 'Block ${_blocks.length + 1}',
+        role: 'system',
+        content: '',
+      );
+      if (atTop) {
+        _blocks.insert(0, block);
+      } else {
+        _blocks.add(block);
+      }
+    });
+    _scheduleSave();
+  }
+
+  void _addMemoryBlock() {
+    if (_blocks.any((b) => b.id == 'memory')) return;
+    setState(() {
+      // Insert the Memory Book block just before Chat History so injected
+      // memories sit with the other system context, not after the dialogue.
+      final chatHistoryIdx = _blocks.indexWhere((b) => b.id == 'chat_history');
+      const memoryBlock = PresetBlock(
+        id: 'memory',
+        name: 'Memory Book',
+        role: 'system',
+        content: '',
+        enabled: true,
+        isStatic: true,
+      );
+      if (chatHistoryIdx != -1) {
+        _blocks.insert(chatHistoryIdx, memoryBlock);
+      } else {
+        _blocks.add(memoryBlock);
+      }
+    });
+    _scheduleSave();
+  }
+
+  void _showRenameDialog() {
+    showPresetRename(
+      context,
+      currentName: _nameCtrl.text,
+      onRename: (val) {
+        setState(() => _nameCtrl.text = val);
+        _scheduleSave();
+      },
+    );
+  }
+
+  void _showAuthorDialog() {
+    showPresetAuthorDialog(
+      context,
+      currentAuthor: _author,
+      onSubmit: (val) {
+        setState(() => _author = val);
+        _scheduleSave();
+      },
+    );
+  }
+
+  /// Picks a cover image and stores it next to the character/persona avatars
+  /// (so it gets a thumbnail). The preset keeps a *relative*, version-suffixed
+  /// path — see `preset_image_paths.dart` for why both matter to cloud sync.
+  Future<void> _pickImage() async {
+    if (_isFeatured) return;
+
+    final path = await pickPresetCover(ref, _currentId);
+    if (path == null || !mounted) return;
+
+    final previous = _imagePath;
+    setState(() => _imagePath = path);
+    _scheduleSave();
+
+    final storage = await ref.read(imageStorageProvider.future);
+    await deleteStoredPresetCover(storage, previous);
+  }
+
+  void _removeImage() {
+    if (_isFeatured) return;
+    final previous = _imagePath;
+    setState(() => _imagePath = null);
+    _scheduleSave();
+    unawaited(
+      ref
+          .read(imageStorageProvider.future)
+          .then((storage) => deleteStoredPresetCover(storage, previous)),
+    );
+  }
+
+  /// Builds a [Preset] from the live editor state (used for Export and Clone).
+  Preset _currentSnapshot() {
+    final name = _nameCtrl.text.trim().isEmpty
+        ? 'New Preset'
+        : _nameCtrl.text.trim();
+    return Preset(
+      id: _currentId,
+      name: name,
+      author: _author.trim().isEmpty ? null : _author.trim(),
+      imagePath: _imagePath,
+      blocks: _blocks,
+      blockFolders: _blockFolders,
+      regexes: _regexes,
+      reasoningEnabled: _parseInlineReasoning,
+      reasoningStart: _parseInlineReasoning ? _reasoningStartCtrl.text : null,
+      reasoningEnd: _parseInlineReasoning ? _reasoningEndCtrl.text : null,
+      guidedGenerationPrompt: _guidedGenerationPrompt,
+      guidedImpersonationPrompt: _guidedImpersonationPrompt,
+      impersonationPrompt: _impersonationPromptCtrl.text.trim().isEmpty
+          ? null
+          : _impersonationPromptCtrl.text,
+      summaryPrompt: widget.preset?.summaryPrompt,
+      createdAt: _createdAt,
+    );
+  }
+
+  void _showOptionsMenu() {
+    showPresetOptions(
+      context,
+      isFeatured: _isFeatured,
+      hasImage: _imagePath != null && _imagePath!.isNotEmpty,
+      canDelete: widget.preset != null,
+      onRename: _showRenameDialog,
+      onSetAuthor: _showAuthorDialog,
+      onPickImage: () => unawaited(_pickImage()),
+      onRemoveImage: _removeImage,
+      // Clone/Export act on the live editor state (including unsaved edits),
+      // not on the persisted preset.
+      onClone: () => unawaited(_clonePreset()),
+      onExport: () => unawaited(exportPreset(context, _currentSnapshot())),
+      onDelete: () => unawaited(_deletePreset()),
+    );
+  }
+
+  Future<void> _clonePreset() async {
+    // `clone` assigns a fresh id and a "(copy)" suffixed name.
+    await ref.read(presetListProvider.notifier).clone(_currentSnapshot());
+    if (mounted) GlazeToast.show(context, 'Preset cloned');
+  }
+
+  Future<void> _deletePreset() async {
+    final preset = widget.preset;
+    if (preset == null) return;
+    await deletePresetAndFolderMemberships(ref, preset.id, PresetKind.normal);
+    widget.onDeleted?.call();
+  }
+
+  Future<void> _showRegexSheet() async {
+    _saveTimer?.cancel();
+    await _performSave();
+    if (!mounted) return;
+    await showGlazeSheet<void>(
+      context: context,
+      useRootNavigator: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black54,
+      isScrollControlled: true,
+      builder: (_) => RegexSheet(presetId: _currentId),
+    );
+    if (!mounted) return;
+    final presets = ref.read(presetListProvider).value ?? [];
+    final preset = presets.where((p) => p.id == _currentId).firstOrNull;
+    if (preset != null) setState(() => _regexes = List.from(preset.regexes));
+  }
+
+  InputDecoration _inputDecoration(String hint) {
+    return InputDecoration(
+      hintText: hint,
+      hintStyle: TextStyle(
+        color: context.cs.onSurfaceVariant.withValues(alpha: 0.5),
+      ),
+      filled: true,
+      fillColor: Colors.white.withValues(alpha: 0.04),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: BorderSide(color: context.cs.outline),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: BorderSide(color: context.cs.outline),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: BorderSide(color: context.cs.primary),
+      ),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+    );
+  }
+}
+
+// ─── _SectionLabel ───────────────────────────────────────────────────────────
+
+class _SectionLabel extends StatelessWidget {
+  final String text;
+  final String? helpTerm;
+  const _SectionLabel(this.text, {this.helpTerm});
+
+  @override
+  Widget build(BuildContext context) {
+    final label = Text(
+      text,
+      style: TextStyle(
+        fontSize: 13,
+        color: context.cs.onSurfaceVariant,
+        fontWeight: FontWeight.w500,
+      ),
+    );
+    if (helpTerm == null) return label;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        label,
+        HelpTip(term: helpTerm!),
+      ],
+    );
+  }
+}
+
+// ─── _SettingsToggle ─────────────────────────────────────────────────────────
+
+class _SettingsToggle extends StatelessWidget {
+  final String label;
+  final String description;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+  final String? helpTerm;
+
+  const _SettingsToggle({
+    required this.label,
+    required this.description,
+    required this.value,
+    required this.onChanged,
+    this.helpTerm,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final labelWidget = Text(
+      label,
+      style: TextStyle(fontSize: 14, color: context.cs.onSurface),
+    );
+    return Row(
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (helpTerm != null)
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    labelWidget,
+                    HelpTip(term: helpTerm!),
+                  ],
+                )
+              else
+                labelWidget,
+              const SizedBox(height: 2),
+              Text(
+                description,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: context.cs.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+        Switch(value: value, onChanged: onChanged),
+      ],
+    );
+  }
+}
+
+// ─── PresetBlockEditorWindow ────────────────────────────────────────────────────
+
+/// The preset a `preset-block` window [view] edits a block of, or null for
+/// any other view.
+String? _blockWindowPreset(String view) {
+  final uri = Uri.parse(view);
+  return uri.path == 'preset-block' ? uri.queryParameters['preset'] : null;
+}
+
+/// A prompt block's editor in a desktop floating window (`preset-block`). It
+/// works on the preset editor it was opened from, which closes it when it goes
+/// away, so edits land on that editor's block list like the inline ones do.
+class PresetBlockEditorWindow extends StatelessWidget {
+  final String presetId;
+  final String blockId;
+
+  const PresetBlockEditorWindow({
+    super.key,
+    required this.presetId,
+    required this.blockId,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final editor = PresetEditorBodyState._mounted[presetId];
+    final block = editor?._blocks.where((b) => b.id == blockId).firstOrNull;
+    if (editor == null || block == null) return const SizedBox.shrink();
+    return editor._blockEditorView(
+      context,
+      block,
+      close: () => popDesktopWindow(context),
+    );
+  }
+}
+
+// ─── _BlockEditorInline ─────────────────────────────────────────────────────────
+
+/// Editor for one prompt block. Stash and Delete are not here: they are handed
+/// to the host's header via [PresetBlockEditorActions].
+class _BlockEditorInline extends StatelessWidget {
+  final PresetBlock block;
+  final ValueChanged<PresetBlock> onSave;
+
+  const _BlockEditorInline({
+    super.key,
+    required this.block,
+    required this.onSave,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final config = [
+      GenericEditorSection(
+        title: null,
+        fields: [
+          GenericEditorField(
+            key: 'name',
+            label: 'placeholder_block_name'.tr(),
+            type: 'text',
+          ),
+          GenericEditorField(
+            key: 'role',
+            label: 'label_role'.tr(),
+            type: 'select',
+            options: [
+              {'label': 'System', 'value': 'system'},
+              {'label': 'User', 'value': 'user'},
+              {'label': 'Assistant', 'value': 'assistant'},
+            ],
+          ),
+          GenericEditorField(
+            key: 'insertionMode',
+            label: 'label_insertion'.tr(),
+            type: 'select',
+            options: [
+              {'label': 'Relative', 'value': 'relative'},
+              {'label': 'Depth', 'value': 'depth'},
+            ],
+          ),
+          GenericEditorField(
+            key: 'depth',
+            label: 'label_depth'.tr(),
+            type: 'select',
+            options: List.generate(
+              20,
+              (i) => {'label': '${i + 1}', 'value': i + 1},
+            ),
+            showIf: (item) => item['insertionMode'] == 'depth',
+          ),
+          GenericEditorField(
+            key: 'appendToLastMessage',
+            label: 'label_append_last_user'.tr(),
+            type: 'select',
+            options: [
+              {'label': 'No', 'value': false},
+              {'label': 'Yes', 'value': true},
+            ],
+          ),
+          GenericEditorField(
+            key: 'sendEmptyBlock',
+            label: 'label_send_empty_block'.tr(),
+            type: 'switch',
+            showIf: (item) => item['appendToLastMessage'] != true,
+          ),
+          GenericEditorField(
+            key: 'content',
+            label: 'section_content'.tr(),
+            type: 'textarea',
+            rows: 5,
+            expandable: true,
+          ),
+        ],
+      ),
+    ];
+
+    return GenericEditor(
+      item: block.toJson(),
+      config: config,
+      scrollable: true,
+      // In a desktop window the content takes the window's remaining height.
+      fillField: 'content',
+      onChanged: (values) {
+        onSave(PresetBlock.fromJson(values));
+      },
+    );
+  }
+}
+
+// ─── _AuthorsNoteBlockEditor ────────────────────────────────────────────────────
+
+/// Inline editor for the `authors_note` block. Edits the per-preset settings
+/// (role / insertion mode / depth) on the block itself, while the note's
+/// content + enabled are session-scoped: shown here read-only and edited via the
+/// linked chat note sheet. Outside a chat ([charId] == null) a hint is shown.
+class _AuthorsNoteBlockEditor extends ConsumerWidget {
+  final PresetBlock block;
+  final String? charId;
+
+  /// The preset being edited, so the note sheet this links to edits the same
+  /// block rather than the one the open chat happens to resolve to. Null for
+  /// a preset that has not been saved yet.
+  final String? presetId;
+  final ValueChanged<PresetBlock> onSave;
+
+  const _AuthorsNoteBlockEditor({
+    super.key,
+    required this.block,
+    required this.charId,
+    required this.presetId,
+    required this.onSave,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final note = charId == null
+        ? null
+        : ref.watch(chatProvider(charId!)).value?.session?.authorsNote;
+    final content = note?.content ?? '';
+
+    final config = [
+      GenericEditorSection(
+        title: null,
+        fields: [
+          GenericEditorField(
+            key: 'role',
+            label: 'label_role'.tr(),
+            type: 'select',
+            options: [
+              {'label': 'System', 'value': 'system'},
+              {'label': 'User', 'value': 'user'},
+              {'label': 'Assistant', 'value': 'assistant'},
+            ],
+          ),
+          GenericEditorField(
+            key: 'insertionMode',
+            label: 'label_insertion'.tr(),
+            type: 'select',
+            options: [
+              {'label': 'Relative', 'value': 'relative'},
+              {'label': 'Depth', 'value': 'depth'},
+            ],
+          ),
+          GenericEditorField(
+            key: 'depth',
+            label: 'label_depth'.tr(),
+            type: 'select',
+            options: List.generate(
+              20,
+              (i) => {'label': '${i + 1}', 'value': i + 1},
+            ),
+            showIf: (item) => item['insertionMode'] == 'depth',
+          ),
+        ],
+      ),
+    ];
+
+    return Material(
+      type: MaterialType.transparency,
+      child: ListView(
+        padding: EdgeInsets.only(
+          top: MediaQuery.paddingOf(context).top + 16,
+          bottom:
+              MediaQuery.paddingOf(context).bottom + editorTrailingGap(context),
+        ),
+        children: [
+          _linkedSessionContentCard(
+            context,
+            charId: charId,
+            content: content,
+            hint:
+                "Author's note content is tied to a chat. Open a chat to edit it.",
+            onEdit: () =>
+                showAuthorsNoteSheet(context, charId, presetId: presetId),
+          ),
+          GenericEditor(
+            item: block.toJson(),
+            config: config,
+            scrollable: false,
+            onChanged: (values) => onSave(PresetBlock.fromJson(values)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── _SummaryBlockEditor ────────────────────────────────────────────────────────
+
+/// Inline editor for the `summary` block. Edits per-preset settings (role /
+/// insertion mode / depth / prefix) on the block; the summary content is
+/// session-scoped (stored in the summary repo), shown here and edited via the
+/// linked chat summary sheet. Outside a chat ([charId] == null) a hint is shown.
+class _SummaryBlockEditor extends ConsumerWidget {
+  final PresetBlock block;
+  final String? charId;
+  final ValueChanged<PresetBlock> onSave;
+
+  const _SummaryBlockEditor({
+    super.key,
+    required this.block,
+    required this.charId,
+    required this.onSave,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final sessionId = charId == null
+        ? null
+        : ref.watch(chatProvider(charId!)).value?.session?.id;
+    final content = sessionId == null
+        ? ''
+        : (ref.watch(summaryContentProvider(sessionId)).value ?? '');
+
+    final config = [
+      GenericEditorSection(
+        title: null,
+        fields: [
+          GenericEditorField(
+            key: 'role',
+            label: 'label_role'.tr(),
+            type: 'select',
+            options: [
+              {'label': 'System', 'value': 'system'},
+              {'label': 'User', 'value': 'user'},
+              {'label': 'Assistant', 'value': 'assistant'},
+            ],
+          ),
+          GenericEditorField(
+            key: 'insertionMode',
+            label: 'label_insertion'.tr(),
+            type: 'select',
+            options: [
+              {'label': 'Relative', 'value': 'relative'},
+              {'label': 'Depth', 'value': 'depth'},
+            ],
+          ),
+          GenericEditorField(
+            key: 'depth',
+            label: 'label_depth'.tr(),
+            type: 'select',
+            options: List.generate(
+              20,
+              (i) => {'label': '${i + 1}', 'value': i + 1},
+            ),
+            showIf: (item) => item['insertionMode'] == 'depth',
+          ),
+        ],
+      ),
+    ];
+
+    return Material(
+      type: MaterialType.transparency,
+      child: ListView(
+        padding: EdgeInsets.only(
+          top: MediaQuery.paddingOf(context).top + 16,
+          bottom:
+              MediaQuery.paddingOf(context).bottom + editorTrailingGap(context),
+        ),
+        children: [
+          _linkedSessionContentCard(
+            context,
+            charId: charId,
+            content: content,
+            hint: 'hint_summary_needs_chat'.tr(),
+            onEdit: () => showMemorySheet(context, charId!),
+          ),
+          GenericEditor(
+            item: block.toJson(),
+            config: config,
+            scrollable: false,
+            onChanged: (values) => onSave(PresetBlock.fromJson(values)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Editor for the Guided Generation block.
+///
+/// A 1:1 port of the Vue editor's special case for this block: an explanatory
+/// line, the generation prompt, the impersonation prompt, and then the same
+/// role/insertion/depth the other blocks carry. Both prompts belong to the
+/// preset rather than to the block, so they are handed back separately.
+class _GuidedGenerationBlockEditor extends StatelessWidget {
+  final PresetBlock block;
+  final String generationPrompt;
+  final String impersonationPrompt;
+  final void Function(PresetBlock block, String generation, String impersonation)
+  onSave;
+
+  const _GuidedGenerationBlockEditor({
+    super.key,
+    required this.block,
+    required this.generationPrompt,
+    required this.impersonationPrompt,
+    required this.onSave,
+  });
+
+  static const _generationKey = 'guidedGenerationPrompt';
+  static const _impersonationKey = 'guidedImpersonationPrompt';
+
+  @override
+  Widget build(BuildContext context) {
+    final config = [
+      GenericEditorSection(
+        title: 'block_guided_generation'.tr(),
+        fields: [
+          GenericEditorField(
+            key: 'info',
+            label: '',
+            type: 'info',
+            text: 'guided_generation_block_hint'.tr(),
+          ),
+          GenericEditorField(
+            key: _generationKey,
+            label: 'label_guided_generation_prompt'.tr(),
+            type: 'textarea',
+            rows: 2,
+            expandable: true,
+          ),
+          GenericEditorField(
+            key: _impersonationKey,
+            label: 'label_guided_impersonation_prompt'.tr(),
+            type: 'textarea',
+            rows: 2,
+            expandable: true,
+          ),
+          GenericEditorField(
+            key: 'role',
+            label: 'label_role'.tr(),
+            type: 'select',
+            options: [
+              {'label': 'System', 'value': 'system'},
+              {'label': 'User', 'value': 'user'},
+              {'label': 'Assistant', 'value': 'assistant'},
+            ],
+          ),
+          GenericEditorField(
+            key: 'insertionMode',
+            label: 'label_insertion'.tr(),
+            type: 'select',
+            options: [
+              {'label': 'Relative', 'value': 'relative'},
+              {'label': 'Depth', 'value': 'depth'},
+            ],
+          ),
+          GenericEditorField(
+            key: 'depth',
+            label: 'label_depth'.tr(),
+            type: 'select',
+            options: List.generate(
+              20,
+              (i) => {'label': '${i + 1}', 'value': i + 1},
+            ),
+            showIf: (item) => item['insertionMode'] == 'depth',
+          ),
+        ],
+      ),
+    ];
+
+    return Material(
+      type: MaterialType.transparency,
+      child: GenericEditor(
+        item: {
+          ...block.toJson(),
+          _generationKey: generationPrompt,
+          _impersonationKey: impersonationPrompt,
+        },
+        config: config,
+        onChanged: (values) {
+          // The two prompts are not block fields, so they are lifted back out
+          // before the rest is read as a block — `PresetBlock.fromJson` would
+          // drop them, and the preset would silently keep its old text.
+          final generation = (values[_generationKey] ?? '').toString();
+          final impersonation = (values[_impersonationKey] ?? '').toString();
+          final blockJson = Map<String, dynamic>.from(values)
+            ..remove(_generationKey)
+            ..remove(_impersonationKey);
+          onSave(
+            PresetBlock.fromJson(blockJson),
+            generation,
+            impersonation,
+          );
+        },
+      ),
+    );
+  }
+}
+
+// ─── shared content card ─────────────────────────────────────────────────────
+
+/// Card showing the chat-scoped content of a linked block (Author's Note /
+/// Summary) with an "Edit content" action, or a hint when no chat is active.
+Widget _linkedSessionContentCard(
+  BuildContext context, {
+  required String? charId,
+  required String content,
+  required String hint,
+  required VoidCallback onEdit,
+}) {
+  return Padding(
+    padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+    child: GlassSurface(
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: context.cs.outline),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Text(
+                  'section_content'.tr(),
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: context.cs.onSurface,
+                  ),
+                ),
+                const Spacer(),
+                Text(
+                  'preset_content_from_chat'.tr(),
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: context.cs.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            if (charId == null)
+              Text(
+                hint,
+                style: TextStyle(
+                  fontSize: 13,
+                  height: 1.4,
+                  color: context.cs.onSurfaceVariant,
+                ),
+              )
+            else ...[
+              Text(
+                content.isEmpty ? 'Empty' : content,
+                maxLines: 4,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 14,
+                  height: 1.4,
+                  color: content.isEmpty
+                      ? context.cs.onSurfaceVariant
+                      : context.cs.onSurface.withValues(alpha: 0.9),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Material(
+                color: context.cs.primary.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(10),
+                child: InkWell(
+                  onTap: onEdit,
+                  borderRadius: BorderRadius.circular(10),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.edit_outlined,
+                          size: 18,
+                          color: context.cs.primary,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          'preset_edit_content'.tr(),
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: context.cs.primary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    ),
+  );
+}

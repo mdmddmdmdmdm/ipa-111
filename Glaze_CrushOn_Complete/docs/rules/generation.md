@@ -1,0 +1,518 @@
+# Generation Lifecycle Rules
+
+Mandatory rules for any code that participates in chat generation, summary, memory draft, or transport.
+
+Full formal invariants with code references: `docs/INVARIANTS.md`
+
+---
+
+## Generation types and their scopes
+
+| Type | State owner | Streaming | Abort |
+|------|-------------|-----------|-------|
+| Chat | `ChatState.isGenerating` per `charId` | Yes (SSE) | `AbortHandler`: `CancelToken` + `_activeGenId` |
+| Image gen | `AbortHandler._imgGenCancelToken` + `isGeneratingImage` | No (one-shot) | Separate cancel token from text SSE |
+| Summary (manual) | Widget-local in `summary_tab.dart` | No | Not abortable (INV-S2) |
+| Summary (auto) | `AutoSummaryStage`, from `PostGenCoordinator` | No | Not abortable (INV-S2) |
+| Memory draft | `MemoryBookController` | No | Per-draft `CancelToken`; mutex via `memory_active_drafts_provider` |
+| Ext blocks | `ExtensionPostGenService._blocksCancelTokens` | No (per-block LLM call) | `cancelBlocks()` cancels every registered per-run token; independent of chat cancel token (INV-EG5) |
+| JS extension (`glaze.generateText`) | `ActiveApiConfigProvider` (active or connection-profile slot) | No (one-shot, 55 s timeout) | Per-call `CancelToken` from the bridge handler |
+| JS extension (`glaze.triggerGeneration`) | `GenerationDispatcher` | Routed through `ChatNotifier.continueMessage` / `regenerateLastAssistant` | Reuses chat + memory-draft mutex (INV-JS3) |
+| JS extension periodic | `PeriodicTriggerScheduler` (`Timer.periodic`) | No (side-effect tick) | Each tick creates a fresh `CancelToken`; cancelled ticks are swallowed |
+
+`ChatNotifier` owns `AbortHandler` per `charId` and delegates `abortGeneration()` to it.
+
+---
+
+## Entry paths (chat)
+
+| User action | Orchestrator | Post-SSE (`GenerationPipeline`) |
+|-------------|--------------|----------------------------------|
+| Send message | `_runGeneration` → `GenerationPipeline.run()` | Yes — image tags, extensions, sync |
+| Regenerate | `_runGeneration` → `GenerationPipeline.run()` | Yes |
+| Continue | `ChatGenerationService.generate()` directly | **No** — see INV-CM2 |
+
+---
+
+## Chat and memory concurrency
+
+Chat generation and memory draft generation may overlap, including when they
+use the same session:
+
+- Each request owns its transport, callbacks, accumulator/completer, and cancel token.
+- Chat persists only its owned session result; memory uses targeted draft mutation.
+- Duplicate generation of the same draft remains prohibited.
+- `memoryActiveDraftsProvider` coordinates memory workflows only; it does not block chat.
+
+See `docs/INVARIANTS.md` INV-M3, INV-M4 and
+`test/memory_chat_concurrency_test.dart`.
+
+Image generation runs after text generation completes on the normal/regen path
+(`GenerationPipeline` → `processImageTags()`). Summary is independent.
+
+---
+
+## genId / CancelToken ownership
+
+Every chat generation gets a unique id from `AbortHandler.nextGenId()` (monotonic
+`_activeGenId`). All SSE callbacks **must** treat the generation as stale when
+`!abortHandler.isCurrentGen(expectedGenId)` before mutating `ChatState`.
+
+```dart
+// Pattern passed into StreamGenerationService
+isAborted: () => !abortHandler.isCurrentGen(genId),
+```
+
+`AbortHandler.setCancelToken()` attaches the Dio `CancelToken` for the active gen.
+Image generation uses a separate `_imgGenCancelToken`.
+
+---
+
+## Abort signal chain
+
+```
+ChatNotifier.abortGeneration()
+  → AbortHandler.abortGeneration()
+      → _activeGenId++              ← invalidates pending callbacks
+      → _cancelToken?.cancel()      ← propagates to Dio / SSE
+      → _imgGenCancelToken?.cancel()
+      → cancel cleaner / extension work
+      → capture partial stream and clear transient streaming indicators
+      → atomically persist partial/restoration against latest durable session
+      → re-check generation/ref ownership
+      → publish the durable session to cache/state
+      → isGenerating / isPostGenRunning / isGeneratingImage → false
+      → clear restoration snapshot
+
+Separately:
+  → SseClient: DioException(cancel)
+  → StreamGenerationService: isAborted() → early return, isGenerating false
+```
+
+**Never break this chain.** If `CancelToken` doesn't reach `Dio`, stop only clears UI
+while the TCP stream continues.
+
+Partial/restoration persistence lives in `AbortHandler`, not in `ChatNotifier`
+directly. On a conflict or persistence failure, reload the durable row; never
+publish a speculative restoration. The generation mutex remains held until
+this durable settlement completes. See INV-C3 in `docs/INVARIANTS.md`.
+
+---
+
+## State cleanup on every exit path
+
+`ChatState.isGenerating` must return to `false` on: completion, error, abort, app
+restart (`ChatNotifier.build()` fresh state). `ChatNotifier` uses `ref.keepAlive()` —
+provider disposal is not a cleanup path.
+
+---
+
+## The send window is busy, even though nothing is generating
+
+`sendMessage` paints the user's bubble optimistically and only publishes
+`isGenerating` once the message is durably appended — that ordering is
+deliberate (the assistant placeholder must never precede the message it
+answers). `ChatState.isSendPending` marks that gap so the UI can tell "idle"
+from "the reply is already on its way".
+
+- **The typing bubble and the send-follow scroll key off the whole window,
+  not off `isGenerating`.** `ChatWebViewWidgetFields.isBusy` is that union;
+  the sync dispatcher tracks its edges as `wasBusy`. Both used to wait for
+  `isGenerating`, which lands only once the durable append finishes: the
+  bubble appeared seconds late, and the follow was armed *after* the append it
+  was meant for, so the user's own message landed wherever they were parked
+  and only snapped into place on the next append.
+- **A placeholder that outlives one append must survive every list edit.** It
+  is a virtual message with one constant id, so the page pins it to the tail
+  (`_keepingPlaceholderLast`) and carries it across a full re-render
+  (`clearAll` parks it, `setMessages` puts it back). An update for a
+  placeholder whose node is gone re-creates it rather than dropping the reply.
+- **…and the page must never bring one back on its own.** The same constant id
+  makes every late delta look like the live one. `updateMessage` is rAF-batched
+  and the streaming pushes share the message-mutation queue, while the falling
+  edge removes the placeholder *synchronously* — so a delta issued before the
+  run settled routinely executes after it. The page therefore tracks whether
+  Flutter still believes a placeholder is on screen (`_placeholderActive`,
+  cleared by `removeMessage` and by a re-render that carries none) and
+  re-creates only while it does; `pushStreamingMessageOwned` appends only while
+  the send/generation window is open (`ChatWebViewSyncState.wasBusy`). Without
+  both, the finished reply stands a second time under itself in a bubble
+  nothing removes again — it outlives leaving and re-opening the chat, because
+  no persisted message corresponds to it.
+- **A session switch replaces the chat, so it drops the bubble instead of
+  parking it** (`clearAll(keepPlaceholder: false)`). Carried over, it claims a
+  reply is on its way in a chat where nothing is running, and it then rides
+  along on every following re-render. The same-session re-sync keeps the
+  default, because its `clearAll` is always followed by `setMessages` of the
+  list the placeholder belongs to.
+- **Treat it as busy wherever `isGenerating` gates a UI affordance.** It is why
+  `ChatMessageSync.sync` takes `busy` rather than `isGenerating`: the
+  optimistic bubble is a tail append, and stamping the Regenerate button there
+  flashed one under the message for the whole durable write.
+- **Never branch generation on it.** Nothing in the pipeline reads it, so a
+  leaked `true` can only withhold that button — it can never block or start a
+  run. The sweep in `_sendMessage`'s `finally` is scoped by `_sendPendingSeq`
+  so a settling send cannot clear a newer send's flag.
+- **Work that does not gate the placeholder belongs after the `isGenerating`
+  publish.** The accepted-variation commit (`_commitAcceptedVariation`) is
+  three DB round-trips; in front of the publish it delayed the typing bubble by
+  their full cost on every send. It still runs before `_runGeneration`, which
+  is the ordering prompt assembly actually depends on.
+- **The elapsed clock runs on the whole window too.** `setSendPending` is
+  pushed into the page next to `setGenerating`, and `GenTimer.ensureRunning`
+  makes the hand-off between them a no-op instead of a restart. On
+  `isGenerating` alone the bubble sat there without a clock for the entire
+  durable append.
+- **Anything the bubble is painted from must be reset before the window
+  opens, not inside the run.** `_sendMessage` clears the streaming state at
+  the optimistic paint. `GenerationPipeline.run` clears it as well, but that
+  is a whole durable append later: whatever the previous run left there is
+  what the new typing bubble shows until the first token replaces it — the
+  reply the user just read, appearing again under the message they just sent
+  (and still there after they deleted it).
+
+---
+
+## The typing bubble names the phase, not the wish
+
+`GenerationPhase` (`lib/core/llm/generation_phase.dart`) is the live label
+under the typing pencil. It exists because the bubble used to read
+"Generating…" from the instant it appeared — through context collection,
+memory retrieval, prompt assembly and the whole wait for the first token.
+
+| Phase | Reported by | Covers |
+|-------|-------------|--------|
+| `preparing` | `ChatNotifier._runGeneration`, `PromptPayloadBuilder.collectGenerationContext` | character, persona, API config, history, summary |
+| `retrieving` | `collectGenerationContext` (`onPhase`) | memory candidates + lorebook vector search + message recall, awaited together |
+| `prompt` | `StreamGenerationService` | payload build + `buildPromptInIsolate` |
+| `agents` | `StreamGenerationService` (Studio branch) | tracker cycle before the final writer |
+| `waiting` | `StreamGenerationService` | request sent, no token back yet |
+| `reasoning` / `streaming` | SSE `onUpdate` / Studio `onFinalResponseUpdate` | reasoning-only output vs. visible reply |
+| `finalizing` | `PostGenCoordinator._beginForegroundPostGen` | cleaner, ledger, ext blocks, image tags |
+| `idle` | `GenerationPipeline.run` (`finally`), `AbortHandler` | nothing running — the page falls back to its default label |
+
+Rules:
+
+- **A phase is reported where the work starts, not where it is planned.** A
+  label that runs ahead of the work is the bug this replaced.
+- **Phase writes are scoped to the run.** `StageContext.setPhase` and
+  `StreamGenerationService._phase` drop the write when the genId is no longer
+  current, so a stale run settling late cannot relabel the one that replaced
+  it.
+- **Never derive a phase by scanning accumulated text on every chunk.** The
+  streaming reporters latch (`reportStreamPhase`): one report per transition,
+  never an O(n) trim per delta.
+- Nothing in the pipeline reads the phase — it is a UI signal only, so a
+  missed transition costs a stale label, never a stuck generation.
+- **A deferred publish must be closed before the run settles.** The streaming
+  deltas are published from a frame callback; one that lands after
+  `GenerationPipeline` cleared the streaming state puts the finished reply
+  back into a state that is meant to be empty. `StreamGenerationService`
+  flushes the pending callback synchronously when the stream ends
+  (`closeStreamPublishing`) and drops anything scheduled behind it.
+
+The label crosses into the WebView through `bridge.setGenerationPhase(label)`
+and is swapped with a cross-fade by `renderer/typing_phase.js`; battery saver
+and `prefers-reduced-motion` swap the text outright.
+
+---
+
+## Prompt ordering (do not reorder)
+
+1. Vector lorebook scan (async, `PromptPayloadBuilder`, before isolate)
+2. Keyword lorebook scan (sync, `PromptBuilder`, inside isolate)
+3. Merge keyword + vector (keyword wins; dedupe vector by id)
+4. Memory candidate selection + excerpt packing (`memoryPackingMode`: full / hybrid / chunk_first — see `docs/ARCHITECTURE.md` §4)
+5. Context cutoff — oldest messages trimmed first; deferred `{{memory}}` macro finalization runs after cutoff when `memorySelection` is present
+
+---
+
+## Endpoint URLs — normalize when persisting
+
+`ApiConfig.endpoint` stores the concrete generation URL. Normalize free-text
+input with `EndpointNormalizer.persistedLlmEndpoint` at every persistence
+boundary. Generation transports use the stored endpoint as-is and must not
+append operation routes or probe alternatives after a 404/405.
+
+| Need | Call |
+|------|------|
+| Persisted generation URL | `EndpointNormalizer.persistedLlmEndpoint(...)` |
+| Persisted embeddings URL | `EndpointNormalizer.persistedEmbeddingEndpoint(endpoint)` |
+| Chat Completions URL | `EndpointNormalizer.chatCompletionsUrl(endpoint)` |
+| Responses / Messages / Embeddings / Models | `responsesUrl` / `messagesUrl` / `embeddingsUrl` / `modelsUrl` |
+| OpenAI images | `EndpointNormalizer.imagesUrl(endpoint, 'generations' \| 'edits')` |
+| Gemini base for sibling routes such as model listing | `EndpointNormalizer.geminiBase(endpoint)` |
+| Base only | `EndpointNormalizer.baseUrl(endpoint)` |
+
+Rules:
+
+- The normalizer repairs scheme, typos and version segments and rewrites the
+  base path for hosts in `KnownApiHosts`. A pasted **complete** operation URL is
+  honoured verbatim — that is the escape hatch for providers with an unusual base.
+- Model-list and embedding calls derive sibling URLs through the normalizer.
+- Unsaved settings input is normalized temporarily before connection tests and
+  model listing.
+- Gemini stores the concrete model action URL; its transport only adds auth and
+  streaming query parameters.
+
+---
+
+## Reasoning / thinking controls
+
+`requestReasoning=false` and/or `omitReasoning=true` mean Glaze should not ask
+the transport for provider-native reasoning and should not persist reasoning
+unless the provider explicitly returns it on an enabled final response. Do not
+interpret these flags as a universal provider-side "thinking off" switch.
+
+The effort scale is protocol-agnostic in the UI (`auto | min | low | medium |
+high | max`, same six steps everywhere, like SillyTavern) and is translated at
+send time by `converters/reasoning_effort.dart`: `auto` sends nothing, OpenAI
+wire formats collapse `max` to `high` and `min` to `minimal` (GPT-5 family) or
+`low`, and Anthropic/Gemini read the raw step as a share of the thinking
+budget. Never widen a stored preset's effort by rewriting it on protocol
+switch — resolve it at the transport instead.
+
+`showNativeReasoning` is a **display** control and must never change what is
+requested. On the Responses API it selects `reasoning.summary` only; the
+`reasoning` block itself and its `effort` stay governed by
+`requestReasoning` / `omitReasoning` / `omitReasoningEffort`, exactly as on
+Chat Completions.
+
+## Sampling parameters
+
+The `omit*` flags on `ApiConfig` are the **only** switch for `temperature`,
+`top_p`, `frequency_penalty` and `presence_penalty`. Never gate a parameter on
+its value: `temperature: 0` and `top_p: 1` are settings a user can pick, and
+suppressing them makes the slider a silent no-op that the prompt inspector
+cannot show. `top_k` is the single exception — Anthropic and Gemini reject
+`0`, so `0` keeps meaning "not set".
+
+The flags are protocol-agnostic; every transport honors them. What *is*
+protocol-bound is which parameters exist at all, and `ApiConfigDraft.
+normalizeValues` is the one place that decides it: it clears a value the
+active protocol has no field for (penalties outside the OpenAI wire formats,
+`top_k` on official OpenAI and the Responses API). Keep that list in step with
+the `_supports*` getters in `api_settings_screen.dart` — a value the editor
+hides but normalization keeps will still go on the wire from a control the
+user can no longer see.
+
+Provider notes:
+- OpenAI-compatible/custom transports omit `reasoning_effort` when reasoning is omitted.
+- Anthropic/Gemini transports omit their native thinking config when reasoning is omitted.
+- Gemini 3.x may still think internally by default and may report/bill thought tokens. Gemini 3.1 Pro documents thinking levels, not a guaranteed full off switch.
+- Avoid sending undocumented fields such as `reasoning: { exclude: true }` globally. Add provider-specific body fields only behind explicit protocol/provider support and tests.
+
+Studio Mode (tracker-around-generator, Phase 5+):
+- Studio trackers (intermediate agents) always force reasoning off/omitted.
+- The final Studio generator inherits the resolved `ApiConfig` reasoning
+  settings. Studio also strips prompt-level hidden-reasoning directives from
+  final-generator instructions when reasoning is disabled/omitted, but this
+  only affects prompt text, not provider-internal thinking.
+- One main LLM (the generator) writes the visible reply; trackers run as
+  sidecars and contribute notes that shape the next prompt. Trackers do NOT
+  duplicate the generator's output. Failed trackers abort the Studio turn after
+  the initial attempt plus two retries; the final generator does not run with
+  partial tracker output. See INV-ST5 in `docs/INVARIANTS.md`.
+- Trackers with the same `(provider, model)` and `!runIndividually` are
+  batched into one LLM request via `<agents><agent_task>` XML. The batch
+  system prompt is cache-friendly: shared `<role>` + `<lore>` first, per-agent
+  `<agents>` tail (INV-ST3, INV-ST7). Heavy trackers
+  (`expression`/`illustrator`/`lorebook` name match, or explicit
+  `StudioAgent.runIndividually`) run as individual requests.
+- Retry chain on tracker failure: re-request the same tracker/batch twice, then
+  return a hard Studio error. Missing or unparseable `<result>` blocks count as
+  tracker failure and ask the user to restart generation. There is no
+  individual fallback from a failed batch.
+- Trackers receive `StudioAgent.contextSize` (default 5, hard-cap 200) last
+  messages via `_limitTrackerHistory` + `truncateAgentText` (head 40% + tail
+  60%) + `stripHtmlTags`. The generator uses a stable history window with
+  `maxFinalHistoryMessages` (default 50) and a 70K-token high-water mark. After
+  a completed assistant turn crosses either threshold, the boundary advances
+  by roughly half the current window on a complete chunk boundary. Only
+  `chat_history` rotates. See INV-ST1, INV-ST2.
+- Studio presets are reusable prompt/agent configurations stored in
+  `studio_preset_rows` and selected globally via `activeStudioPresetId`.
+  Per-session state is limited to an on/off toggle in `studio_config_rows`.
+  Agent, cleaner, and Ledger runtime settings live in the preset's
+  `StudioRuntimeSettings`, not in global `PipelineSettings`.
+- A normal turn resolves one immutable `StudioTurnConfigSnapshot` before prompt
+  construction. Trackers, final generation, POST-cleaner, and Ledger consume
+  that same snapshot; mid-turn settings/preset/API changes affect the next
+  turn. Separate manual operations may resolve a fresh snapshot (INV-ST8).
+- POST-processing is separate from the tracker pipeline: the POST-cleaner
+  runs after the full reply and writes a blue `'cleaned'` agent sub-swipe
+  via `ChatRepo.appendAgentSwipe(kind: 'cleaned')`, preserving the original
+  `'final'` as the parent. Hold mode (Marinara) is NOT implemented (Phase
+  1.3 decision). See INV-ST4.
+- **Swipe-first streaming (UX phase):** the `'cleaned'` swipe is pre-created
+  at cleaner start (empty content, parent snapshot cloned) so the blue
+  switcher is visible immediately while the rewrite streams into the chat
+  bubble. On completion the swipe is filled in place via
+  `ChatRepo.updateAgentSwipeContent`; on failure with partial text the
+  truncated text is preserved; on failure with no text the swipe is removed
+  via `ChatRepo.removeAgentSwipe`. Each swipe carries its own `genTime`
+  (cleaner elapsed) + `tokens` (estimateTokens) so the per-swipe badge
+  persists.
+- Cleaner runs are lease-owned per `(sessionId, messageId)`. A newer same-key
+  run cancels and waits for the previous cleanup; superseded queued runs never
+  start. Only the latest shared-state owner may publish cleaner UI/token state
+  (INV-ST9).
+- **Separate audit model setting:** `PipelineSettings.cleaner.postCleanerAuditModel`
+  exists, but is not currently wired into runtime resolution. `CleanerStage`
+  passes the same resolved `cleanerConfig` to both the character/world audit
+  and the cleaner, so the setting currently has no runtime effect.
+- The Studio tracker-cycle is logged in the agentic operations log as a
+  `studioTracker` kind record (Phase 10). The record carries an aggregate
+  `AgentOperationAttempt` covering the whole cycle elapsed time; per-agent
+  breakdown (success / failure, agent names) goes into the `summary` text
+  since `StudioPipelineResult` does not expose per-agent LLM attempts as a
+  structured array. Records are emitted on the success path and on hard
+  failure. Aborted / disabled runs are not logged.
+- Live cycle status is surfaced to the chat UI via `studioCycleStateProvider`
+  (Phase 11) and rendered by `StudioStatusCard` (floating card at the top
+  of the chat). The cycle phases are:
+  `idle → running → writingFinal → done | error`. Aborted
+  runs reset to `idle`.
+
+---
+
+## Session variables on abort/error ✅ ENFORCED (PR-B C11)
+
+`SavedMessageWriter` carries `pendingSessionVars`, but persistence occurs only
+when `GenerationPipeline._commitGenerationResult` merges their delta into the
+latest durable row via `ChatRepo.mutateSession`. Continuation uses the same
+rule. Error, rollback, and abort paths do not apply the delta. See INV-C5.
+
+---
+
+## Continue message
+
+`ChatNotifier.continueMessage()`:
+
+1. Calls `ChatGenerationService.generate()` (SSE + prompt build) directly.
+2. Appends streamed content to the **existing** last assistant message. That
+   message's id sits in `ChatState.continuationTargetId` for the whole run, so
+   the WebView streams into its bubble instead of a typing placeholder.
+3. Delegates to `regenerateLastAssistant()` when a **user** message trails
+   (nothing to extend — generate a reply instead).
+4. Does **not** run `GenerationPipeline` post-steps (image tags, extensions, sync).
+
+See INV-CM1, INV-CM2 before changing this path.
+
+---
+
+## Extension post-generation
+
+After normal/regen completion, `PostGenCoordinator` launches
+`ExtBlocksStage.launchForSwipe()` directly for ordinary generation. In Studio,
+`CleanerStage` launches it after the cleaner finalizes or is skipped. Both paths
+delegate to `ExtensionPostGenService.processAfterGeneration()` and then
+`runBlocksForMessage()`, binding blocks to the visible final or cleaned swipe.
+Failures are logged only (INV-EG2). Execution is gated by
+`extensionsSettings.enabled` and the active preset id (INV-EG3). The block
+chain does not start on aborted or errored generation (INV-EG4).
+
+### Block triggers
+
+`BlockTrigger` controls when a block runs. The chain filter is enforced by
+`_runChain(trigger:)` in `ExtensionPostGenService` — the same chain is
+reused for all three trigger types:
+
+| `BlockTrigger` | Entry point | Cancel / lifecycle |
+|---|---|---|
+| `afterAssistant` | Ordinary: `PostGenCoordinator`; Studio: `CleanerStage`; both → `ExtBlocksStage.launchForSwipe` → `processAfterGeneration` → `runBlocksForMessage` | Registers a per-run token in `_blocksCancelTokens` (INV-EG5) |
+| `afterAssistant` manual rerun | Chat WebView ext-block callback → `runBlocksForMessage` | Registers a per-run token and can replace blocks for the selected swipe |
+| `afterUser` | `ChatNotifier.sendMessage` → `unawaited(_dispatchAfterUserBlocks)` → `runAfterUserBlocks` | Registers its own per-run token; fire-and-forget from the notifier's perspective |
+| `periodic` | `PeriodicTriggerScheduler` → `Timer.periodic(periodicIntervalSeconds)` → `runJsBlock` (no chain) | Runs only through the currently active visual chat bridge; each tick creates a fresh token and loses authorization when active chat changes; scheduler pauses in app background (INV-JS6) |
+
+### Block execution model
+
+```
+blocks = preset.blocks.where(enabled && trigger == requested).sortBy(order)
+prevFuture = null
+for block in blocks:
+    blockFuture = _runSingleBlock(block, prevFuture?.content)
+    if block.dependsOnPrevious:
+        prevFuture = await blockFuture   // serial
+    else:
+        prevFuture = null                // parallel; side-effect via .then(addOrReplace)
+```
+
+- **Serial** (`dependsOnPrevious = true`): block awaits the previous block; receives its output as `previousOutput`.
+- **Parallel** (`dependsOnPrevious = false`): block is launched without `await`; `unawaited(future.then(...))` writes the result via `infoBlocksProvider.notifier.addOrReplace()`.
+
+### Block types
+
+| `BlockType` | Engine | Notes |
+|---|---|---|
+| `infoblock` | `InfoBlockService` (LLM) | Result stored in `InfoBlock.content` |
+| `imageGen` | `ImageGenService` (LLM agent → image API) | `<img data-iig-…>` element with a data-root-relative `src` in `InfoBlock.content` (INV-IG9) |
+| `jsRunner` | Active visual chat's `ChatBridgeController.runJsBlock` | Requires the matching chat WebView bridge; script output becomes block content in a null-origin iframe (INV-EG8) |
+| `interactive` | `PanelHostService` (LLM agent → sandboxed iframe panel) | HTML persisted to `InfoBlock.content`; panel is rendered as a live iframe island |
+
+### Cancel
+
+`ExtensionPostGenService.cancelBlocks()` cancels every token currently
+registered in `_blocksCancelTokens`, covering overlapping chains and reruns.
+Each `_runSingleBlock` checks its per-run token before and after every `await`;
+cancelled blocks are marked `BlockRunStatus.stopped`. This does **not** affect
+the chat text cancel token or in-progress image generation.
+
+### Bridge feedback
+
+On status change, call `ChatBridgeController.updateBlockStatus(messageId, aggregatedStatus)`.
+On panel open/update, call `ChatBridgeController.showExtBlocksPanel(messageId, blocks)`.
+
+### JS bridge abort chain
+
+`glaze.generateText` (JS bridge → `SseClient.streamChatCompletion`) takes a
+fresh `CancelToken` per call. `_generateBridgeText` in
+`ChatWebViewWidget` enforces a 55-second timeout and cancels the token
+on expiry. The token is independent of the chat text generation
+token — aborting the chat does NOT cancel in-flight JS generate calls.
+
+`glaze.triggerGeneration` reuses the chat path entirely — see
+`GenerationDispatcher.dispatch` for the ownership / abort chain.
+
+---
+
+## Adding a new generation path
+
+1. Define abort mechanism (`AbortHandler` or separate `CancelToken`).
+2. Add mutual exclusion only for shared mutable ownership or a concrete shared
+   resource; sharing a `charId` / session alone is not sufficient.
+3. Verify `isCurrentGen(genId)` before mutating shared state after every `await`.
+4. Clear `isGenerating*` on every exit path.
+5. Decide whether post-SSE steps (image tags, extensions) must run — use
+   `GenerationPipeline` or document an explicit exception like continue.
+
+---
+
+## PR verification checklist
+
+Before merging any generation-related PR:
+
+- [ ] Chat produces correct responses end-to-end
+- [ ] Stop preserves partial text when available (AbortHandler / INV-C3)
+- [ ] Regen while generating calls `abortGeneration()` first
+- [ ] Character switch does not abort other characters' generations
+- [ ] Prompt block order matches preset definition
+- [ ] Vector scan before keyword; merge deduplicates correctly
+- [x] Memory injection respects token budget (INV-PS4)
+- [ ] History cutoff trims oldest first
+- [ ] Summary does not touch `ChatState.isGenerating` or messages
+- [ ] Chat and memory overlap without cross-cancellation or cross-persistence (INV-M3, INV-M4)
+- [ ] Image tags run after text on send/regen (not on continue unless changed)
+  - [ ] Extensions post-gen on send/regen only (INV-EG1)
+  - [ ] Block chain does not start on aborted or errored generation (INV-EG4)
+  - [ ] Extension cancel token independent of chat cancel token (INV-EG5)
+  - [ ] `dependsOnPrevious` blocks await preceding block; output chained (INV-EG6)
+  - [ ] JS Runner / interactive panel code runs in null-origin iframe (INV-EG8)
+  - [ ] Bridge `glaze.*` calls gated by preset capabilities (INV-JS1)
+  - [ ] `glaze.triggerGeneration` respects generation mutexes (INV-JS3)
+  - [ ] `glaze.playAudio` does not leak the audio session (INV-JS4)
+  - [ ] `executeCommand` wired registry routes to the same services (INV-JS5)
+  - [ ] Periodic scheduler pauses on app background; no catch-up tick (INV-JS6)
+- [ ] Context limit / API-not-configured errors shown to user
+- [ ] Abort closes TCP (CancelToken reaches Dio)
+- [x] Session vars not leaked on abort/error (INV-C5)

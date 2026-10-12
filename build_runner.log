@@ -1,0 +1,118 @@
+  1s compiling builders/aot
+  2s compiling builders/aot
+  3s compiling builders/aot
+  4s compiling builders/aot
+  5s compiling builders/aot
+  6s compiling builders/aot
+  7s compiling builders/aot
+  8s compiling builders/aot
+  9s compiling builders/aot
+  10s compiling builders/aot
+  11s compiling builders/aot
+  12s compiling builders/aot
+  13s compiling builders/aot
+  14s compiling builders/aot
+  15s compiling builders/aot
+  16s compiling builders/aot
+  17s compiling builders/aot
+  18s compiling builders/aot
+  19s compiling builders/aot
+  20s compiling builders/aot
+  22s compiling builders/aot
+  23s compiling builders/aot
+  24s compiling builders/aot
+  25s compiling builders/aot
+  26s compiling builders/aot
+  27s compiling builders/aot
+  28s compiling builders/aot
+  0s freezed on 1685 inputs; lib/app.dart
+W SDK language version 3.13.0 is newer than `analyzer` language version 3.12.0. Run `flutter packages upgrade`.
+  2s freezed on 1685 inputs: 1 no-op; spent 2s sdk; lib/core/app_runtime.dart
+  4s freezed on 1685 inputs: 9 no-op; spent 2s analyzing, 2s sdk; lib/core/db/migrations/database_integrity.dart
+  10s freezed on 1685 inputs: 55 no-op; spent 7s analyzing, 2s sdk, 1s resolving; lib/core/db/repositories/memory_cadence_repo.dart
+  11s freezed on 1685 inputs: 11 output, 309 no-op; spent 7s analyzing, 2s sdk, 1s resolving; lib/core/models/memory_book_api_settings.dart
+  12s freezed on 1685 inputs: 22 output, 322 no-op; spent 8s analyzing, 2s sdk, 1s resolving; lib/core/navigation/router.dart
+  14s freezed on 1685 inputs: 24 output, 540 no-op; spent 10s analyzing, 2s sdk, 1s resolving; lib/features/character_list/widgets/add_to_folder_sheet.dart
+  16s freezed on 1685 inputs: 25 output, 566 no-op; spent 11s analyzing, 2s resolving, 2s sdk; lib/features/chat/bridge/chat_webview_keep_alive.dart
+  19s freezed on 1685 inputs: 25 output, 729 no-op; spent 14s analyzing, 2s resolving, 2s sdk, 1s reading; lib/features/chat/widgets/quick_replies_panel.dart
+  20s freezed on 1685 inputs: 35 output, 999 no-op; spent 15s analyzing, 2s resolving, 2s sdk, 1s reading; lib/features/studio/widgets/studio_card_rewriter_row.dart
+E freezed on test/continue_message_error_test.dart:
+  40:3: Expected an identifier.
+E freezed on test/continue_message_test.dart:
+  51:3: Expected an identifier.
+  21s freezed on 1685 inputs: 36 output, 1281 no-op; spent 16s analyzing, 2s resolving, 2s sdk, 1s reading; test/db_migration_test.dart
+E freezed on test/memory_chat_concurrency_test.dart:
+  49:3: Expected an identifier.
+  22s freezed on 1685 inputs: 36 output, 1544 no-op; spent 17s analyzing, 2s resolving, 2s sdk, 1s reading; test/rewrite_review_navigation_test.dart
+E freezed on test/send_after_aborted_send_test.dart:
+  46:3: Expected an identifier.
+E freezed on test/send_window_streaming_reset_test.dart:
+  41:3: Expected an identifier.
+  23s freezed on 1685 inputs: 36 output, 1649 no-op; spent 17s analyzing, 2s resolving, 2s sdk, 1s reading
+  0s json_serializable on 3370 inputs; lib/app.dart
+  8s json_serializable on 3370 inputs: 1 no-op; spent 7s analyzing; lib/app.freezed.dart
+  9s json_serializable on 3370 inputs: 1079 skipped, 31 output, 1121 no-op; spent 8s analyzing, 1s resolving; lib/shared/widgets/glaze_spinner.freezed.dart
+E json_serializable on test/continue_message_error_test.dart:
+  40:3: Expected an identifier.
+E json_serializable on test/continue_message_test.dart:
+  51:3: Expected an identifier.
+E json_serializable on test/memory_chat_concurrency_test.dart:
+  49:3: Expected an identifier.
+E json_serializable on test/send_after_aborted_send_test.dart:
+  46:3: Expected an identifier.
+E json_serializable on test/send_window_streaming_reset_test.dart:
+  41:3: Expected an identifier.
+  10s json_serializable on 3370 inputs: 1599 skipped, 31 output, 1641 no-op; spent 8s analyzing, 1s resolving; test/studio_preset_repo_test.freezed.dart
+  11s json_serializable on 3370 inputs: 1649 skipped, 31 output, 1690 no-op; spent 8s analyzing, 1s resolving
+  0s drift_dev on 13480 inputs; lib/app.dart
+  3s drift_dev on 13480 inputs: 78 skipped, 79 output; spent 3s analyzing; lib/core/db/tables.freezed.dart
+  4s drift_dev on 13480 inputs: 1011 skipped, 1082 output; spent 4s analyzing; lib/shared/shell/desktop/app_title_bar.freezed.dart
+W drift_dev on test/continue_message_error_test.dart:
+  Could not resolve Dart library asset:glaze_flutter/test/continue_message_error_test.dart
+  40:3: Expected an identifier.
+W drift_dev on test/continue_message_test.dart:
+  Could not resolve Dart library asset:glaze_flutter/test/continue_message_test.dart
+  51:3: Expected an identifier.
+W drift_dev on test/memory_chat_concurrency_test.dart:
+  Could not resolve Dart library asset:glaze_flutter/test/memory_chat_concurrency_test.dart
+  49:3: Expected an identifier.
+W drift_dev on test/send_after_aborted_send_test.dart:
+  Could not resolve Dart library asset:glaze_flutter/test/send_after_aborted_send_test.dart
+  46:3: Expected an identifier.
+W drift_dev on test/send_window_streaming_reset_test.dart:
+  Could not resolve Dart library asset:glaze_flutter/test/send_window_streaming_reset_test.dart
+  41:3: Expected an identifier.
+  46s drift_dev on 13480 inputs: 1657 skipped, 1724 output, 6 no-op; spent 45s analyzing; lib/core/db/app_db.freezed.dart
+  49s drift_dev on 13480 inputs: 1688 skipped, 1742 output, 19 no-op; spent 48s analyzing, 1s building; lib/core/db/repositories/embedding_repo.freezed.dart
+  52s drift_dev on 13480 inputs: 1689 skipped, 1743 output, 19 no-op; spent 51s analyzing, 1s building; lib/core/db/repositories/extension_presets_repository.freezed.dart
+  55s drift_dev on 13480 inputs: 1692 skipped, 1746 output, 19 no-op; spent 54s analyzing, 1s building; lib/core/db/repositories/info_blocks_repository.freezed.dart
+  58s drift_dev on 13480 inputs: 1703 skipped, 1757 output, 19 no-op; spent 57s analyzing, 1s building; lib/core/db/repositories/memory_book_repo.freezed.dart
+  61s drift_dev on 13480 inputs: 1722 skipped, 1776 output, 19 no-op; spent 60s analyzing, 1s building; lib/core/db/repositories/summary_repo.freezed.dart
+  99s drift_dev on 13480 inputs: 1727 skipped, 1780 output, 20 no-op; spent 98s analyzing, 1s building; lib/core/db/tables.freezed.dart
+  100s drift_dev on 13480 inputs: 2544 skipped, 2539 output, 144 no-op; spent 98s analyzing, 2s building; lib/features/image_gen/widgets/image_gen_sheet.freezed.dart
+W drift_dev on test/continue_message_error_test.dart:
+  Could not resolve Dart library asset:glaze_flutter/test/continue_message_error_test.dart
+  40:3: Expected an identifier.
+W drift_dev on test/continue_message_test.dart:
+  Could not resolve Dart library asset:glaze_flutter/test/continue_message_test.dart
+  51:3: Expected an identifier.
+W drift_dev on test/memory_chat_concurrency_test.dart:
+  Could not resolve Dart library asset:glaze_flutter/test/memory_chat_concurrency_test.dart
+  49:3: Expected an identifier.
+  101s drift_dev on 13480 inputs: 3136 skipped, 3128 output, 153 no-op; spent 99s analyzing, 2s building; test/novelai_image_provider_test.freezed.dart
+W drift_dev on test/send_after_aborted_send_test.dart:
+  Could not resolve Dart library asset:glaze_flutter/test/send_after_aborted_send_test.dart
+  46:3: Expected an identifier.
+W drift_dev on test/send_window_streaming_reset_test.dart:
+  Could not resolve Dart library asset:glaze_flutter/test/send_window_streaming_reset_test.dart
+  41:3: Expected an identifier.
+  111s drift_dev on 13480 inputs: 3298 skipped, 3287 output, 156 no-op; spent 108s analyzing, 2s building; lib/app.dart.types.temp.dart
+  112s drift_dev on 13480 inputs: 3322 skipped, 3288 output, 163 no-op; spent 108s analyzing, 4s building; lib/core/db/app_db.dart.types.temp.dart
+  114s drift_dev on 13480 inputs: 4404 skipped, 3293 output, 548 no-op; spent 108s analyzing, 5s building; lib/core/services/card_rewriter/card_evolution_collector_coordinator.dart.types.temp.dart
+  114s drift_dev on 13480 inputs: 5867 skipped, 3293 output, 1049 no-op; spent 108s analyzing, 6s building; lib/features/extensions/services/extension_post_gen_service.dart.types.temp.dart
+  115s drift_dev on 13480 inputs: 7471 skipped, 3293 output, 1589 no-op; spent 109s analyzing, 7s building; test/info_block_injector_test.dart.types.temp.dart
+  116s drift_dev on 13480 inputs: 8281 skipped, 3293 output, 1859 no-op; spent 109s analyzing, 7s building; test/tracker_repo_test.dart.types.temp.dart
+  117s drift_dev on 13480 inputs: 8317 skipped, 3293 output, 1870 no-op; spent 109s analyzing, 7s building
+  0s source_gen:combining_builder on 6740 inputs; lib/app.dart
+  0s source_gen:combining_builder on 6740 inputs: 5019 skipped, 37 output, 1684 no-op
+  Failed to build with build_runner/aot in 181s; wrote 3397 outputs.

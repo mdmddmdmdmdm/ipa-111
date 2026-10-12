@@ -1,0 +1,386 @@
+import 'dart:async';
+
+import 'package:easy_localization/easy_localization.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../../core/llm/context_calculator.dart';
+import '../../../core/models/chat_message.dart';
+import '../../../core/llm/prompt_isolate.dart';
+import '../../../shared/widgets/glaze_spinner.dart';
+import '../providers/prompt_build_providers.dart';
+import '../../../core/models/api_config.dart';
+import '../../../features/settings/api_list_provider.dart';
+import '../../../shared/theme/app_colors.dart';
+import '../../../shared/widgets/sheet_view.dart';
+import '../../../shared/widgets/glass_surface.dart';
+import '../../settings/api_settings_screen.dart';
+import '../../settings/tokenizer_labels.dart';
+import '../../settings/tokenizer_provider.dart';
+import '../../../core/llm/tokenizer.dart';
+import '../chat_provider.dart';
+import '../state/cached_token_breakdown.dart';
+import 'requests/inspector_insets.dart';
+import 'tokenizer_widgets.dart';
+
+class TokenizerSheet extends ConsumerStatefulWidget {
+  final String charId;
+
+  /// When true, render only the body content (no SheetView chrome) for
+  /// embedding inside the Prompt Inspector's tabbed shell.
+  final bool embedded;
+
+  const TokenizerSheet({
+    super.key,
+    required this.charId,
+    this.embedded = false,
+  });
+
+  @override
+  ConsumerState<TokenizerSheet> createState() => _TokenizerSheetState();
+}
+
+class _TokenizerSheetState extends ConsumerState<TokenizerSheet> {
+  TokenBreakdown? _breakdown;
+  int? _contextSize;
+  bool _loading = false;
+
+  /// Something changed while a count was running; count again when it ends,
+  /// so the last change is never the one left out.
+  bool _recountPending = false;
+
+  /// Slider positions while the sheet is open, null until the user drags one.
+  ///
+  /// The stored setting is the value until then. Reading it once in
+  /// `initState` instead froze whatever was loaded at that moment — the
+  /// defaults, when the sheet opened before settings arrived — and the next
+  /// save wrote those defaults back over the stored ones.
+
+  @override
+  void initState() {
+    super.initState();
+    _loadOrCalculate();
+  }
+
+  /// Paints the last breakdown this chat produced right away, then counts
+  /// the next prompt for real.
+  ///
+  /// The cached one is only a placeholder: it may come from the last
+  /// generation — the prompt *before* the reply that followed — or from
+  /// before an edit, a hide or a settings change, none of which a cheap key
+  /// can see. Showing it as final is how this tab used to disagree with the
+  /// Preview tab next to it.
+  void _loadOrCalculate() {
+    final cached = ref.read(cachedTokenBreakdownProvider(widget.charId));
+    final chatApi = _resolveApiConfig();
+    if (cached != null && chatApi != null) {
+      _contextSize = chatApi.contextSize;
+      _breakdown = cached;
+    }
+    // Not from initState itself: _calculate sets state.
+    _loading = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _calculate());
+  }
+
+  ApiConfig? _resolveApiConfig() {
+    try {
+      return ref.read(activeApiConfigProvider);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _recount() {
+    if (_loading) {
+      _recountPending = true;
+      return;
+    }
+    _calculate();
+  }
+
+  Future<void> _calculate() async {
+    // Callers await a write first (hide, unhide), so the sheet can be gone by
+    // the time we get here.
+    if (!mounted) return;
+    _recountPending = false;
+    setState(() => _loading = true);
+
+    try {
+      final chatState = ref.read(chatProvider(widget.charId)).value;
+      final session = chatState?.session;
+      if (session == null) {
+        setState(() => _loading = false);
+        return;
+      }
+
+      final builder = ref.read(promptPayloadBuilderProvider);
+      final inputs = await builder.collectInputs(
+        charId: widget.charId,
+        session: session,
+      );
+      _contextSize = inputs.apiConfig.contextSize;
+
+      final result = await buildFromInputsInIsolate(inputs);
+      // The fast-path collectInputs skips vector search (it can take seconds
+      // via the embedding endpoint); reuse the count the last real generation
+      // found.
+      final breakdown = result.breakdown.withVectorLore(
+        ref.read(lastVectorLoreTokensProvider(widget.charId)),
+      );
+
+      ref.read(cachedTokenBreakdownProvider(widget.charId).notifier).state =
+          breakdown;
+
+      if (mounted) setState(() => _breakdown = breakdown);
+    } catch (e) {
+      debugPrint('Tokenizer error: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _loading = false);
+        if (_recountPending) unawaited(_calculate());
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    ref.listen(chatProvider(widget.charId), (prev, next) {
+      final prevSession = prev?.value?.session;
+      final nextSession = next.value?.session;
+      if (prevSession != nextSession) _recount();
+    });
+
+    // Editing the connection's window or trim mode changes which messages
+    // survive, so the numbers on screen are wrong the moment it is saved, and
+    // so is the cached breakdown other screens read.
+    ref.listen(
+      activeApiConfigProvider.select(
+        (config) => config?.contextBudgetSignature ?? '',
+      ),
+      (previous, next) {
+        if (previous == null || previous == next) return;
+        ref.read(cachedTokenBreakdownProvider(widget.charId).notifier).state =
+            null;
+        _recount();
+      },
+    );
+
+    // A different tokenizer makes every number on screen stale; app-level
+    // listeners already dropped the cached breakdowns.
+    ref.listen(tokenizerStatusProvider.select((s) => s.active), (prev, next) {
+      if (prev != null && prev != next) _recount();
+    });
+
+    final contextSize = _contextSize ?? 4096;
+    final bd = _breakdown;
+    final used = bd?.totalTokens ?? 0;
+    final remaining = bd?.remaining ?? (contextSize - used);
+    final usedPercent = contextSize > 0 ? (used / contextSize * 100) : 0.0;
+    final historyFill = bd?.historyFillPercent ?? 0.0;
+
+    // A recount keeps the previous numbers on screen; the spinner is only for
+    // when there is nothing to show yet.
+    final body = _loading && bd == null
+        ? const Center(child: GlazeSpinner())
+        : bd == null
+        ? Center(
+            child: Text(
+              'label_no_data'.tr(),
+              style: TextStyle(color: context.cs.onSurfaceVariant),
+            ),
+          )
+        : _buildMainView(
+            bd,
+            contextSize,
+            used,
+            remaining,
+            usedPercent,
+            historyFill,
+          );
+
+    if (widget.embedded) {
+      // The Prompt Inspector injects the floating-header height as the body's
+      // top inset. Offset the whole embedded column (toolbar included) by it,
+      // then strip the inset from descendants so the scroll body — which also
+      // reads padding.top — doesn't add the gap a second time.
+      return Padding(
+        padding: EdgeInsets.only(top: MediaQuery.paddingOf(context).top),
+        child: MediaQuery.removePadding(
+          context: context,
+          removeTop: true,
+          child: body,
+        ),
+      );
+    }
+
+    return SheetView(
+      title: 'tab_context'.tr(),
+      showBack: true,
+      fitContent: true,
+      onBack: () => Navigator.of(context).maybePop(),
+      actions: [
+        SheetViewAction(
+          icon: const Icon(Icons.refresh, size: 20),
+          tooltip: 'action_recalculate'.tr(),
+          onPressed: _loading ? () {} : _calculate,
+        ),
+      ],
+      body: body,
+    );
+  }
+
+  Widget _buildMainView(
+    TokenBreakdown bd,
+    int contextSize,
+    int used,
+    int remaining,
+    double usedPercent,
+    double historyFill,
+  ) {
+    final messages =
+        ref.watch(chatProvider(widget.charId)).value?.messages ??
+        const <ChatMessage>[];
+    final hiddenCount = messages.where((m) => m.isHidden).length;
+
+    // The anchor carries only an id; the tile shows where it sits in the chat
+    // as the reader sees it, so hidden and typing rows are not counted.
+    final visibleMessages = messages
+        .where((m) => !m.isHidden && !m.isTyping)
+        .toList();
+    final anchorId = bd.historyAnchorId;
+    final anchorIndex = anchorId == null
+        ? -1
+        : visibleMessages.indexWhere((m) => m.id == anchorId);
+
+    return Builder(
+      builder: (context) => ListView(
+        shrinkWrap: true,
+        padding: withInspectorBottomInset(
+          context,
+          const EdgeInsets.all(
+            16,
+          ).copyWith(top: 16 + MediaQuery.paddingOf(context).top),
+        ),
+        children: [
+          HeroCard(
+            used: used,
+            contextSize: contextSize,
+            remaining: remaining,
+            historyFill: historyFill,
+          ),
+          const SizedBox(height: 12),
+          _buildTokenizerTile(context),
+          const SizedBox(height: 24),
+          TokenizerLayout(breakdown: bd, contextSize: contextSize),
+          if (bd.cutoffIndex > 0) ...[
+            const SizedBox(height: 12),
+            // The gear leads to the connection's Context section: the window
+            // and the trim mode are what decide this number, and neither is
+            // adjustable from here.
+            CutoffWarning(
+              cutoffCount: bd.cutoffIndex,
+              onOpenSettings: () => showApiSettingsSheet(
+                context,
+                focusSection: ApiSettingsSection.context,
+              ),
+            ),
+          ],
+          if (anchorIndex >= 0) ...[
+            const SizedBox(height: 12),
+            CacheAnchorTile(
+              messageNumber: anchorIndex + 1,
+              preview: visibleMessages[anchorIndex].content,
+            ),
+          ],
+          if (hiddenCount > 0) ...[
+            const SizedBox(height: 24),
+            // Hiding is done by selecting messages in the chat; this is the
+            // only bulk way back, so it stays.
+            _ActionTile(
+              icon: Icons.visibility_outlined,
+              label: 'action_unhide_all_count'.tr(args: ['$hiddenCount']),
+              onTap: () async {
+                await ref
+                    .read(chatProvider(widget.charId).notifier)
+                    .unhideAllMessages();
+                await _calculate();
+              },
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+extension on _TokenizerSheetState {
+  Widget _buildTokenizerTile(BuildContext context) {
+    final status = ref.watch(tokenizerStatusProvider);
+    final setting = ref.watch(
+      activeApiConfigProvider.select((c) => c?.tokenizer ?? kTokenizerAuto),
+    );
+    final pending = status.requested != status.active;
+    return TokenizerInfoTile(
+      activeLabel: tokenizerLabel(status.active),
+      pendingLabel: pending ? tokenizerLabel(status.requested) : null,
+      isAuto: TokenizerKind.fromId(setting) == null,
+      downloading: pending && status.phase == TokenizerPhase.downloading,
+      failed: pending && status.phase == TokenizerPhase.failed,
+      onRetry: () => ref.read(tokenizerStatusProvider.notifier).retry(),
+      onOpenSettings: () => showApiSettingsSheet(
+        context,
+        focusSection: ApiSettingsSection.context,
+      ),
+    );
+  }
+}
+
+class _ActionTile extends StatelessWidget {
+  const _ActionTile({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onTap != null;
+    final tint = context.cs.onSurface;
+    return Opacity(
+      opacity: enabled ? 1 : 0.45,
+      child: GlassSurface(
+        borderRadius: BorderRadius.circular(12),
+        tint: tint.withValues(alpha: 0.06),
+        border: Border.all(color: tint.withValues(alpha: 0.18)),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: 16, color: context.cs.onSurface),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: context.cs.onSurface,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}

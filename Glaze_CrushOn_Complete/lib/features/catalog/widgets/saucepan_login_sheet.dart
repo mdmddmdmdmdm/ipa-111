@@ -1,0 +1,234 @@
+import 'package:easy_localization/easy_localization.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../../core/utils/error_format.dart';
+import '../../../shared/theme/app_colors.dart';
+import '../../../shared/widgets/glaze_bottom_sheet.dart';
+import '../../../shared/widgets/glaze_action_button.dart';
+import '../../../shared/widgets/glaze_toast.dart';
+import '../saucepan_account_provider.dart';
+
+/// Menu entry point for the "Saucepan Account" item. When already logged in it
+/// offers a log-out sheet; otherwise it opens the login form.
+Future<void> openSaucepanAccountSheet(
+    BuildContext context, WidgetRef ref) async {
+  if (!ref.read(saucepanAccountProvider).isLoggedIn) {
+    await showSaucepanLoginSheet(context);
+    return;
+  }
+  await GlazeBottomSheet.show<void>(
+    context,
+    title: 'Saucepan account',
+    items: [
+      BottomSheetItem(
+        label: 'Log out',
+        icon: Icons.logout_rounded,
+        isDestructive: true,
+        onTap: () async {
+          Navigator.of(context, rootNavigator: true).pop();
+          await ref.read(saucepanAccountProvider.notifier).logout();
+        },
+      ),
+      BottomSheetItem(
+        label: 'Cancel',
+        icon: Icons.close_rounded,
+        onTap: () => Navigator.of(context, rootNavigator: true).pop(),
+      ),
+    ],
+  );
+}
+
+/// Prompts for a Saucepan login before a URL import can run. The companion
+/// definition is pulled with the account's token, so there is nothing to import
+/// without one. Returns true once the user is signed in, so the caller can go
+/// ahead with the extraction.
+Future<bool> showSaucepanLoginRequiredSheet(
+  BuildContext context,
+  WidgetRef ref,
+) async {
+  var wantsLogin = false;
+  await GlazeBottomSheet.show<void>(
+    context,
+    title: 'Saucepan',
+    bigInfo: BottomSheetBigInfo(
+      icon: Icons.ramen_dining_outlined,
+      description:
+          'Importing a Saucepan companion reads its definition with your '
+          'Saucepan account, so you need to sign in first.',
+      buttonText: 'Log in',
+      onButtonTap: () {
+        wantsLogin = true;
+        Navigator.of(context, rootNavigator: true).pop();
+      },
+    ),
+  );
+  if (!wantsLogin || !context.mounted) return false;
+  await showSaucepanLoginSheet(context);
+  return ref.read(saucepanAccountProvider).isLoggedIn;
+}
+
+/// Opens the Saucepan login form as a modal sheet.
+Future<void> showSaucepanLoginSheet(BuildContext context) {
+  return GlazeBottomSheet.show<void>(
+    context,
+    title: 'Log in to Saucepan',
+    child: const _SaucepanLoginForm(),
+  );
+}
+
+/// Handle + password login, with a "paste a bearer token instead" fallback.
+/// Once a token is stored, pasting a `saucepan.ai/companion/…` URL into Import
+/// extracts the companion locally on-device (see `import_url_dialog`).
+class _SaucepanLoginForm extends ConsumerStatefulWidget {
+  const _SaucepanLoginForm();
+
+  @override
+  ConsumerState<_SaucepanLoginForm> createState() => _SaucepanLoginFormState();
+}
+
+class _SaucepanLoginFormState extends ConsumerState<_SaucepanLoginForm> {
+  final _handle = TextEditingController();
+  final _password = TextEditingController();
+  final _token = TextEditingController();
+  bool _busy = false;
+  bool _useToken = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _handle.dispose();
+    _password.dispose();
+    _token.dispose();
+    super.dispose();
+  }
+
+  Future<void> _run(Future<void> Function() action) async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await action();
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+        GlazeToast.show(context, 'Signed in to Saucepan');
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _error = formatError(e);
+        });
+      }
+    }
+  }
+
+  void _login() {
+    final handle = _handle.text.trim();
+    final password = _password.text;
+    if (handle.isEmpty || password.isEmpty) {
+      setState(() => _error = 'error_handle_password_required'.tr());
+      return;
+    }
+    _run(() =>
+        ref.read(saucepanAccountProvider.notifier).login(handle, password));
+  }
+
+  void _saveToken() {
+    final token = _token.text.trim();
+    if (token.isEmpty) {
+      setState(() => _error = 'error_token_required'.tr());
+      return;
+    }
+    _run(() => ref.read(saucepanAccountProvider.notifier).setToken(token));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = context.cs;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Extraction pulls the companion definition under your account and '
+            'reassembles it on-device. A throwaway account is recommended.',
+            style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+          ),
+          const SizedBox(height: 16),
+          if (!_useToken) ...[
+            _field(cs, _handle, 'Handle', enabled: !_busy),
+            const SizedBox(height: 10),
+            _field(cs, _password, 'Password', obscure: true, enabled: !_busy),
+            const SizedBox(height: 16),
+            _primaryButton('Log in', _busy ? null : _login),
+            const SizedBox(height: 8),
+            GlazeActionButton(
+              icon: Icons.key_rounded,
+              label: 'Use a bearer token instead',
+              expand: true,
+              onTap: _busy ? null : () => setState(() => _useToken = true),
+            ),
+          ] else ...[
+            _field(cs, _token, 'Bearer token', enabled: !_busy),
+            const SizedBox(height: 16),
+            _primaryButton('Save token', _busy ? null : _saveToken),
+            const SizedBox(height: 8),
+            GlazeActionButton(
+              icon: Icons.login_rounded,
+              label: 'Log in with handle instead',
+              expand: true,
+              onTap: _busy ? null : () => setState(() => _useToken = false),
+            ),
+          ],
+          if (_error != null) ...[
+            const SizedBox(height: 12),
+            Text(_error!,
+                style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _field(
+    ColorScheme cs,
+    TextEditingController controller,
+    String hint, {
+    bool obscure = false,
+    bool enabled = true,
+  }) {
+    return TextField(
+      controller: controller,
+      obscureText: obscure,
+      enabled: enabled,
+      style: TextStyle(fontSize: 14, color: cs.onSurface),
+      decoration: InputDecoration(
+        hintText: hint,
+        hintStyle: TextStyle(color: cs.onSurfaceVariant, fontSize: 14),
+        filled: true,
+        fillColor: cs.surfaceContainerHighest,
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide.none,
+        ),
+      ),
+    );
+  }
+
+  Widget _primaryButton(String label, VoidCallback? onTap) {
+    return GlazeActionButton(
+      icon: Icons.login_rounded,
+      label: label,
+      tone: GlazeActionTone.primary,
+      expand: true,
+      busy: _busy,
+      onTap: onTap,
+    );
+  }
+}

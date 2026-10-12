@@ -1,0 +1,57 @@
+Glaze SpicyChat sign-in + character prompt fixes - v9
+
+SPICYCHAT SIGN-IN
+Root causes found:
+- SpicyChatWebSession.dispose() never reset its "started" marker, so after any
+  sign-out (and the login sheet signed out every time it opened) the background
+  session could not restart: login checks and For You / Recent always failed.
+- The login sheet blocked up to ~26 s on that background session and then wiped
+  cookies/storage and reloaded /login, which could erase a login made meanwhile.
+- "View account" judged the session two seconds in from a half-loaded page, then
+  marked the app signed out and closed itself, so the next tap went to sign-in.
+- Nothing recorded the account's email/name, and credential capture only worked
+  for email+password logins. SpicyChat uses an emailed code or Google/Apple/X/
+  Discord, so nothing was ever saved and a saved account could never be replayed.
+
+Changes:
+- New services/spicychat_session.dart: clean wipe (cookies, localStorage,
+  sessionStorage, IndexedDB), session snapshot capture/restore, identity
+  detection (email/username from the site's stored tokens), and the scripts that
+  press the sign-in buttons.
+- Fresh sign-in: the session is cleared BEFORE any page loads, so nothing can
+  sign in on its own. Sign-out wipes cookies (incl. Google's) and storage and
+  never waits on a page load.
+- Signing in saves a session snapshot under the account's email/username; the
+  Accounts list shows that name.
+- Tapping a saved account restores its saved session. If it has expired, the
+  sheet signs in again: saved email filled in and Continue pressed (SpicyChat
+  then emails a code), or "Continue with Google/Apple/X/Discord" pressed.
+- View account no longer closes itself or changes sign-in state. It restores the
+  saved session if the cookie jar was emptied, and only shows a dismissible
+  "Sign in again" hint after repeated signed-out readings.
+- Saved credentials are no longer overwritten with null on re-save.
+
+SECURITY NOTE: session snapshots are stored in app preferences like the app's
+existing saved credentials; they are not encrypted (no secure-storage package in
+the project).
+
+CHARACTER PROMPT
+- The character's System Prompt and Chat History Instruction were never sent in
+  normal chat (only Studio used them). They are now: System Prompt before the
+  character card, Chat History Instruction after the newest message (depth 0).
+- New "Advanced Definition" field (Prompt Blocks section of the editor), sent
+  right after the character card. Stored in character.extensions
+  ["advanced_definition"], so there is no DB migration and it round-trips through
+  V2 JSON/PNG export and import.
+- The no-preset fallback prompt used to send no character at all; it now sends
+  the full card. A stale active-preset id now falls back to the first preset
+  instead of that fallback.
+- Description / Personality / Scenario / Examples still depend on the active
+  preset having those blocks enabled.
+- Card token estimate now counts the three fields above.
+
+Build note: Flutter/Dart are not installed in the environment this was written
+in, so it was NOT compiled or run. Static delimiter checks and the embedded
+JavaScript (run in Node against mock storage) passed. Run `flutter analyze` and
+`flutter test` (new: test/character_prompt_extras_test.dart,
+test/spicychat_session_test.dart).

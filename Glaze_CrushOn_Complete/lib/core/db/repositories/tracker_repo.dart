@@ -1,0 +1,349 @@
+import 'dart:convert';
+
+import 'package:drift/drift.dart';
+
+import '../../models/tracker.dart';
+import '../../utils/time_helpers.dart';
+import '../app_db.dart';
+import 'reconciliation_state_codec.dart';
+
+class TrackerRepo {
+  static const initialGameTimeSeedName = '__game_time_initial_seed_v1';
+  static const ledgerManualMutationRevisionName =
+      '__ledger_manual_mutation_revision_v1';
+
+  final AppDatabase db;
+
+  const TrackerRepo(this.db);
+
+  Future<List<Tracker>> getBySessionId(String sessionId) {
+    return (db.select(db.trackerRows)
+          ..where((t) => t.sessionId.equals(sessionId))
+          ..orderBy([(t) => OrderingTerm(expression: t.name)]))
+        .get()
+        .then((rows) => rows.map(_rowToModel).toList());
+  }
+
+  Future<List<String>> getAllSessionIds() async {
+    final rows = await db
+        .customSelect('SELECT DISTINCT session_id FROM tracker_rows')
+        .get();
+    return rows.map((r) => r.read<String>('session_id')).toList();
+  }
+
+  Future<List<Tracker>> getBySessionAndScope(String sessionId, String scope) {
+    return (db.select(db.trackerRows)
+          ..where((t) => t.sessionId.equals(sessionId))
+          ..where((t) => t.scope.equals(scope))
+          ..orderBy([(t) => OrderingTerm(expression: t.name)]))
+        .get()
+        .then((rows) => rows.map(_rowToModel).toList());
+  }
+
+  Future<Tracker?> get(String sessionId, String name) async {
+    final row =
+        await (db.select(db.trackerRows)
+              ..where((t) => t.sessionId.equals(sessionId))
+              ..where((t) => t.name.equals(name)))
+            .getSingleOrNull();
+    return row == null ? null : _rowToModel(row);
+  }
+
+  Future<int> getLedgerManualMutationRevision(String sessionId) async {
+    final tracker = await get(sessionId, ledgerManualMutationRevisionName);
+    return int.tryParse(tracker?.value ?? '') ?? 0;
+  }
+
+  /// Advances the fence used to invalidate Ledger work started before a
+  /// manual canon mutation. The caller should include this in its transaction.
+  Future<int> bumpLedgerManualMutationRevision(String sessionId) async {
+    final next = await getLedgerManualMutationRevision(sessionId) + 1;
+    await upsertValue(
+      sessionId,
+      ledgerManualMutationRevisionName,
+      '$next',
+      scope: 'system',
+      provenance: 'manual_ledger_mutation',
+    );
+    return next;
+  }
+
+  /// Returns live user-owned override and lock rows only.
+  Future<List<Tracker>> getLiveCanonControls(String sessionId) {
+    return getBySessionAndScope(sessionId, 'ledger').then(
+      (trackers) => trackers
+          .where(
+            (tracker) =>
+                tracker.name.startsWith('canon_override:') ||
+                tracker.name.startsWith('canon_lock:'),
+          )
+          .toList(growable: false),
+    );
+  }
+
+  /// Returns the complete first-turn game-clock seed, if one exists.
+  ///
+  /// Ledger normally reads model-owned state from committed snapshots. A new
+  /// session has no snapshot yet, so this narrowly scoped bootstrap is the
+  /// only live model-owned state allowed into that initial committed base.
+  Future<List<Tracker>> getInitialGameTimeSeed(String sessionId) async {
+    final stored = await get(sessionId, initialGameTimeSeedName);
+    if (stored != null &&
+        stored.scope == 'system' &&
+        stored.provenance == 'game_time_seed') {
+      try {
+        final value = jsonDecode(stored.value);
+        if (value is Map<String, dynamic>) {
+          final time = value['time'];
+          final date = value['date'];
+          final day = value['day'];
+          if (time is String &&
+              time.trim().isNotEmpty &&
+              date is String &&
+              date.trim().isNotEmpty &&
+              day is String &&
+              day.trim().isNotEmpty) {
+            return {'world:time': time, 'world:date': date, 'world:day': day}
+                .entries
+                .map(
+                  (entry) => Tracker(
+                    sessionId: sessionId,
+                    name: entry.key,
+                    value: entry.value,
+                    scope: 'ledger',
+                    provenance: 'game_time_seed',
+                    updatedAt: stored.updatedAt,
+                  ),
+                )
+                .toList(growable: false);
+          }
+        }
+      } on FormatException {
+        // Fall through to the legacy provenance-only representation.
+      }
+    }
+    return _getCompleteGameTime(
+      sessionId,
+      (tracker) => tracker.provenance == 'game_time_seed',
+    );
+  }
+
+  /// Returns the complete live game clock, but never exposes a partial tuple.
+  Future<List<Tracker>> getCompleteGameTime(String sessionId) {
+    return _getCompleteGameTime(sessionId, (_) => true);
+  }
+
+  Future<List<Tracker>> _getCompleteGameTime(
+    String sessionId,
+    bool Function(Tracker tracker) include,
+  ) async {
+    const names = {'world:time', 'world:date', 'world:day'};
+    final trackers = await getBySessionAndScope(sessionId, 'ledger');
+    final seed = trackers
+        .where(
+          (tracker) =>
+              include(tracker) &&
+              names.contains(tracker.name) &&
+              tracker.value.trim().isNotEmpty,
+        )
+        .toList(growable: false);
+    return seed.map((tracker) => tracker.name).toSet().length == names.length
+        ? seed
+        : const [];
+  }
+
+  /// Persists the complete first-turn clock atomically if its rows still match
+  /// the values observed before the seed dialog opened.
+  Future<bool> seedInitialGameTime({
+    required String sessionId,
+    required String time,
+    required String date,
+    String day = '0',
+    Map<String, String?> expectedValues = const {},
+  }) {
+    return db.transaction(() async {
+      if (expectedValues.isNotEmpty) {
+        for (final name in const ['world:time', 'world:date', 'world:day']) {
+          final current = await get(sessionId, name);
+          if (current?.value != expectedValues[name]) return false;
+        }
+      }
+      if (await get(sessionId, initialGameTimeSeedName) == null) {
+        await upsertValue(
+          sessionId,
+          initialGameTimeSeedName,
+          jsonEncode({'time': time, 'date': date, 'day': day}),
+          scope: 'system',
+          provenance: 'game_time_seed',
+        );
+      }
+      for (final entry in {
+        'world:time': time,
+        'world:date': date,
+        'world:day': day,
+      }.entries) {
+        await upsertValue(
+          sessionId,
+          entry.key,
+          entry.value,
+          scope: 'ledger',
+          provenance: 'game_time_seed',
+        );
+      }
+      return true;
+    });
+  }
+
+  /// Atomic upsert by natural key (sessionId, name). If a tracker with the
+  /// same name already exists for the session, its value/scope/provenance/
+  /// updatedAt are overwritten. Safe under concurrent writes — Drift resolves
+  /// the PK conflict in a single statement.
+  Future<void> upsert(Tracker tracker) {
+    return db
+        .into(db.trackerRows)
+        .insertOnConflictUpdate(
+          TrackerRowsCompanion.insert(
+            sessionId: tracker.sessionId,
+            name: tracker.name,
+            value: Value(tracker.value),
+            scope: Value(tracker.scope),
+            provenance: Value(tracker.provenance),
+            basisRevision: Value(tracker.basisRevisionNumber),
+            basisRevisionHash: Value(tracker.basisRevisionHash),
+            updatedAt: Value(
+              tracker.updatedAt == 0
+                  ? currentTimestampSeconds()
+                  : tracker.updatedAt,
+            ),
+          ),
+        );
+  }
+
+  /// Convenience: upsert with explicit fields (avoids constructing a Tracker
+  /// at call sites that only have the new value).
+  Future<void> upsertValue(
+    String sessionId,
+    String name,
+    String value, {
+    String scope = 'chat',
+    String provenance = '',
+    int basisRevisionNumber = 0,
+    String basisRevisionHash = '',
+  }) {
+    return db
+        .into(db.trackerRows)
+        .insertOnConflictUpdate(
+          TrackerRowsCompanion.insert(
+            sessionId: sessionId,
+            name: name,
+            value: Value(value),
+            scope: Value(scope),
+            provenance: Value(provenance),
+            basisRevision: Value(basisRevisionNumber),
+            basisRevisionHash: Value(basisRevisionHash),
+            updatedAt: Value(currentTimestampSeconds()),
+          ),
+        );
+  }
+
+  Future<void> delete(String sessionId, String name) {
+    return (db.delete(db.trackerRows)
+          ..where((t) => t.sessionId.equals(sessionId))
+          ..where((t) => t.name.equals(name)))
+        .go();
+  }
+
+  Future<void> clearForSession(String sessionId) {
+    return (db.delete(db.trackerRows)
+          ..where((t) => t.sessionId.equals(sessionId))
+          ..where((t) => t.name.equals(ledgerManualMutationRevisionName).not()))
+        .go();
+  }
+
+  /// Atomically replaces all trackers for [sessionId] with [trackers].
+  /// Wraps delete + insert in a single transaction so a concurrent read never
+  /// observes a half-replaced state.
+  Future<void> replaceForSession(String sessionId, List<Tracker> trackers) {
+    return db.transaction(() async {
+      await clearForSession(sessionId);
+      for (final t in trackers) {
+        if (t.name == ledgerManualMutationRevisionName) continue;
+        await upsert(t);
+      }
+    });
+  }
+
+  /// Replaces only model-owned Ledger rows from a committed base while keeping
+  /// chat trackers, diagnostics, and live user-owned canon controls intact.
+  Future<void> replaceLedgerState(
+    String sessionId,
+    List<Tracker> committedBase,
+  ) async {
+    await db.transaction(() async {
+      final liveControls = await getBySessionAndScope(sessionId, 'ledger');
+      final controls = liveControls.where(
+        (tracker) =>
+            tracker.name.startsWith('canon_override:') ||
+            tracker.name.startsWith('canon_lock:'),
+      );
+      await (db.delete(db.trackerRows)
+            ..where((row) => row.sessionId.equals(sessionId))
+            ..where((row) => row.scope.equals('ledger')))
+          .go();
+      final byName = <String, Tracker>{
+        for (final tracker in committedBase)
+          if (tracker.scope == 'ledger' &&
+              !tracker.name.startsWith('canon_override:') &&
+              !tracker.name.startsWith('canon_lock:'))
+            tracker.name: tracker,
+        for (final tracker in controls) tracker.name: tracker,
+      };
+      for (final tracker in byName.values) {
+        await upsert(tracker);
+      }
+    });
+  }
+
+  /// Restores model-owned Ledger rows from an exact captured database image.
+  /// Non-Ledger rows are preserved. The caller may include this in a wider
+  /// transaction.
+  Future<void> restoreLedgerRowsExact(String sessionId, String rowsJson) async {
+    final rows = ReconciliationStateCodec.decode(
+      sessionId: sessionId,
+      ledgerJson: rowsJson,
+      knowledgeJson: '[]',
+    ).trackerRows;
+    await db.transaction(() async {
+      await (db.delete(db.trackerRows)
+            ..where((row) => row.sessionId.equals(sessionId))
+            ..where((row) => row.scope.equals('ledger')))
+          .go();
+      if (rows.isNotEmpty) {
+        await db.batch((batch) {
+          batch.insertAll(db.trackerRows, rows);
+        });
+      }
+    });
+  }
+
+  Stream<List<Tracker>> watchBySessionId(String sessionId) {
+    return (db.select(db.trackerRows)
+          ..where((t) => t.sessionId.equals(sessionId))
+          ..orderBy([(t) => OrderingTerm(expression: t.name)]))
+        .watch()
+        .map((rows) => rows.map(_rowToModel).toList());
+  }
+
+  Tracker _rowToModel(TrackerRow row) {
+    return Tracker(
+      sessionId: row.sessionId,
+      name: row.name,
+      value: row.value,
+      scope: row.scope,
+      provenance: row.provenance,
+      basisRevisionNumber: row.basisRevision,
+      basisRevisionHash: row.basisRevisionHash,
+      updatedAt: row.updatedAt,
+    );
+  }
+}

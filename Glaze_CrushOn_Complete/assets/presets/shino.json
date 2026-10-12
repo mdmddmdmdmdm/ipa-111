@@ -1,0 +1,551 @@
+{
+    "temperature": 1,
+    "frequency_penalty": 0,
+    "presence_penalty": 0,
+    "top_p": 1,
+    "top_k": 0,
+    "top_a": 0,
+    "min_p": 0,
+    "repetition_penalty": 1,
+    "max_context_unlocked": true,
+    "tool_reasoning_mode": "disabled",
+    "openai_max_context": 60000,
+    "openai_max_tokens": 20000,
+    "names_behavior": 0,
+    "send_if_empty": "",
+    "impersonation_prompt": "",
+    "new_chat_prompt": "[Start a new Chat]",
+    "new_group_chat_prompt": "[Start a new group chat. Group members: {{group}}]",
+    "new_example_chat_prompt": "[Example Chat]",
+    "continue_nudge_prompt": "[Continue your last message without repeating its original content.]",
+    "bias_preset_selected": "Default (none)",
+    "wi_format": "{0}",
+    "scenario_format": "{{scenario}}",
+    "personality_format": "{{personality}}",
+    "group_nudge_prompt": "[Write the next reply only as {{char}}.]",
+    "stream_openai": true,
+    "prompts": [
+        {
+            "name": "Disabled Main",
+            "system_prompt": true,
+            "role": "user",
+            "content": "",
+            "identifier": "main",
+            "injection_position": 0,
+            "injection_depth": 4,
+            "injection_order": 100,
+            "forbid_overrides": false,
+            "injection_trigger": [
+                "normal"
+            ]
+        },
+        {
+            "name": "Disabled NSFW",
+            "system_prompt": true,
+            "role": "system",
+            "content": "",
+            "identifier": "nsfw",
+            "injection_position": 0,
+            "injection_depth": 4,
+            "injection_order": 100,
+            "forbid_overrides": false,
+            "injection_trigger": []
+        },
+        {
+            "identifier": "dialogueExamples",
+            "name": "Chat Examples",
+            "system_prompt": true,
+            "marker": true
+        },
+        {
+            "name": "Disabled Jailbreak",
+            "system_prompt": true,
+            "role": "system",
+            "content": "",
+            "identifier": "jailbreak",
+            "injection_position": 0,
+            "injection_depth": 4,
+            "injection_order": 100,
+            "forbid_overrides": false,
+            "injection_trigger": []
+        },
+        {
+            "identifier": "chatHistory",
+            "name": "Chat History",
+            "system_prompt": true,
+            "marker": true
+        },
+        {
+            "identifier": "worldInfoAfter",
+            "name": "World Info After",
+            "system_prompt": true,
+            "marker": true,
+            "role": "system",
+            "content": "",
+            "injection_position": 0,
+            "injection_depth": 4,
+            "injection_order": 100,
+            "forbid_overrides": false,
+            "injection_trigger": []
+        },
+        {
+            "identifier": "worldInfoBefore",
+            "name": "World Info Before",
+            "system_prompt": true,
+            "marker": true,
+            "role": "system",
+            "content": "",
+            "injection_position": 0,
+            "injection_depth": 4,
+            "injection_order": 100,
+            "forbid_overrides": false,
+            "injection_trigger": []
+        },
+        {
+            "identifier": "enhanceDefinitions",
+            "role": "system",
+            "name": "Enhance Definitions",
+            "content": "If you have more knowledge of {{char}}, add to the character's lore and personality to enhance them but keep the Character Sheet's definitions absolute.",
+            "system_prompt": true,
+            "marker": false,
+            "injection_position": 0,
+            "injection_depth": 4,
+            "injection_order": 100,
+            "forbid_overrides": false,
+            "injection_trigger": []
+        },
+        {
+            "identifier": "charDescription",
+            "name": "Character Description",
+            "system_prompt": true,
+            "marker": true,
+            "role": "system",
+            "content": "",
+            "injection_position": 0,
+            "injection_depth": 4,
+            "injection_order": 100,
+            "forbid_overrides": false,
+            "injection_trigger": []
+        },
+        {
+            "identifier": "charPersonality",
+            "name": "Character Personality",
+            "system_prompt": true,
+            "marker": true,
+            "role": "system",
+            "content": "",
+            "injection_position": 0,
+            "injection_depth": 4,
+            "injection_order": 100,
+            "forbid_overrides": false,
+            "injection_trigger": []
+        },
+        {
+            "identifier": "scenario",
+            "name": "Scenario",
+            "system_prompt": true,
+            "marker": true,
+            "role": "system",
+            "content": "",
+            "injection_position": 0,
+            "injection_depth": 4,
+            "injection_order": 100,
+            "forbid_overrides": false,
+            "injection_trigger": []
+        },
+        {
+            "identifier": "personaDescription",
+            "name": "Persona Description",
+            "system_prompt": true,
+            "marker": true,
+            "role": "system",
+            "content": "",
+            "injection_position": 0,
+            "injection_depth": 4,
+            "injection_order": 100,
+            "forbid_overrides": false,
+            "injection_trigger": []
+        },
+        {
+            "identifier": "62e0cccb-70ed-40f5-8924-e5ac1cde715d",
+            "system_prompt": false,
+            "enabled": false,
+            "marker": false,
+            "name": "Formatting",
+            "role": "user",
+            "content": "<formatting>\nNormal output: <rp_plan>...</rp_plan>, then a timestamp, then the story. \nAlways in 3POV.\n- Actions and narration in plain text only.\n- Dialogue only inside \"double quotes\".\n- Thoughts: *like this*\n- Sounds: **BOOM**, **CRASH**.\n- Onomatopoeia (sound words like \"tch\", \"mmm\", \"ugh\") \n- Emphasis through CAPS, elongation (\"sooo annoying\"), or stretching (\"whaaat?!\")\n- [Date: DD/MM/YYYY, Day of Week | Time: HH:MM] ALWAYS start every response with a timestamp block.\n- If the focus shifts to another scene, use the following format:\n[Location: Name. Characters: Names]\n</formatting>",
+            "injection_position": 0,
+            "injection_depth": 4,
+            "forbid_overrides": false,
+            "injection_order": 100,
+            "injection_trigger": []
+        },
+        {
+            "identifier": "df39de3a-91d4-4034-9e5c-11de34c6c39b",
+            "system_prompt": false,
+            "enabled": false,
+            "marker": false,
+            "name": "Language",
+            "role": "user",
+            "content": "<language>\nStory, dialogue, and character thoughts: Russian. Preserve setting-specific names and register; Russian does not imply a Russian or modern setting. Onomatopoeia, sounds, etc. must be adapt to Russian.\n</language>",
+            "injection_position": 0,
+            "injection_depth": 0,
+            "injection_order": 100,
+            "forbid_overrides": false,
+            "injection_trigger": []
+        },
+        {
+            "identifier": "95a2e1a8-c658-44d5-8368-1b57becdf29e",
+            "system_prompt": false,
+            "enabled": false,
+            "marker": false,
+            "name": "NSFW Rules",
+            "role": "user",
+            "content": "<NSFW_rules>\nWrite sex scenes extremely explicit and direct. Use words like cock, cunt, pussy, ass, hole, balls, tits, clit, cum, precum, spit. No metaphors, no flowery language, no fade-to-black.\n\nMatch the scene to the characters:\n- Stay 100% in character. Tone, dirty talk, dominance/submission, pace, and kinks must fit their personality and current mood.\n- Sex can be tender, passionate, filthy, teasing, rough, slow and deep, desperate, playful, or anything in between. Do not default to hard/rough every time.\n- Let intensity rise and fall naturally instead of staying at one level.\n\nKeep it varied and alive:\n- Change positions, rhythm, and focus when it feels natural for the moment and characters, not on a checklist.\n- Mix different sensations: wet sounds, skin slapping, stretching, throbbing, dripping, trembling, clenching, overstimulation, aftershocks.\n- Include body reactions (shaking legs, arched back, tight grip, rolling eyes, drooling, cock twitching, pussy pulsing) and genuine vocal reactions that fit the character.\n- Show both partners’ pleasure and agency. Let them initiate, redirect, dirty talk, or take control according to who they are.\n\nAvoid bland repetition:\n- Do not loop the same thrusting description or moan.\n- Progress the scene: buildup, different rhythms, peaks, short pauses, continue or switch focus (oral, hands, penetration, multiple spots).\n- Keep the writing tight, concrete, and easy to read. No purple prose.\n</NSFW_rules>\n",
+            "injection_position": 0,
+            "injection_depth": 4,
+            "injection_order": 100,
+            "injection_trigger": [],
+            "forbid_overrides": false
+        },
+        {
+            "identifier": "071839d7-fd05-48e3-99f8-95003c9d3b6c",
+            "system_prompt": false,
+            "enabled": false,
+            "marker": false,
+            "name": "Response Scope",
+            "role": "system",
+            "content": "<length>\nresponse length: 300-600 word.\n</length>",
+            "injection_position": 0,
+            "injection_depth": 4,
+            "injection_order": 100,
+            "injection_trigger": [],
+            "forbid_overrides": false
+        },
+        {
+            "identifier": "fe2b14f5-b405-4ab1-9c4e-642f24240c87",
+            "system_prompt": false,
+            "enabled": false,
+            "marker": false,
+            "name": "Character And Persona",
+            "role": "user",
+            "content": "<story_data>\n<character_description>\n{{description}}\n</character_description>\n<character_personality>\n{{personality}}\n</character_personality>\n<scenario>\n{{scenario}}\n</scenario>\n<player_character>\nName: {{user}}\n{{persona}}\n</player_character>\n</story_data>",
+            "injection_position": 0,
+            "injection_depth": 4,
+            "injection_order": 100,
+            "injection_trigger": [],
+            "forbid_overrides": false
+        },
+        {
+            "identifier": "fdb44947-fa7c-40ef-ac5b-0777bc34cd98",
+            "system_prompt": false,
+            "enabled": false,
+            "marker": false,
+            "name": "Check",
+            "role": "user",
+            "content": "<check_instructions>\nBefore normal RP continuation, output one editorial checklist in <rp_plan>...</rp_plan>, replacing each field's instructions with findings relevant to the current reply.\n\n<rp_plan>\nGenre Tags: Identify the story and scene genres that should guide this continuation.\n\nCharacters and Actions: Track everyone physically present, their actions, positions, distances, occupied hands, held and relevant nearby objects, clothing and its established condition. Include only details affecting the current interaction in the prose.\n\nCHARACTER:\nIdentify each relevant NPC's distinctive voice, temperament, priorities, and limitations; let them shape the reply without profile recitation or repetitive trait displays. Profile details need not appear every turn.\n\nAnti-Omniscience Check:\nSeparate narrator context from each character's knowledge.\n\n- SOURCES: Characters may know only what they plausibly knew beforehand, personally perceived, or received through established in-world sources. Cards, OOC instructions, checklists, unperceived narration, and unwitnessed scenes grant no knowledge.\n- ACCESS: Respect sightlines, distance, barriers, audibility, attention, language, sensory limits, location, and timing. Partial access reveals no hidden details, exact causes, unseen participants, or events elsewhere.\n- PRIVACY: Unspoken thoughts, feelings, motives, intentions, and decisions remain private between all characters, including NPCs. Never invent player behavior to expose them.\n- INFERENCE: Distinguish suspicion from knowledge; deductions must follow from evidence available to that character, with precision matching the evidence. Intelligence, familiarity, intuition, and expertise permit plausible guesses, never mind-reading. Guesses cannot justify acting on inaccessible facts.\n- GAPS: Preserve uncertainty. Characters may investigate, ask, speculate, misunderstand, lie, bluff, or remain unsure; narration must not silently turn beliefs or claims into facts.\n- NO RETROACTIVE ACCESS: Never invent prior observations, off-screen conversations, messages, informants, or remembered clues solely to justify chosen knowledge or behavior. New information must enter through an established in-world event before use.\n\nReport only relevant knowledge boundaries, without revealing restricted information or the full deduction process; briefly state if none apply.\n\nANTI-ECHO:\nCheck both dialogue and narration. Do not repeat the player's contribution as a question, statement, ellipsis, stretched word, paraphrase, confirmation, or recap. Do not move the echo into an NPC's thoughts or into narrative explanation.\n\nBanned forms:\n\n- Direct: \"Greenland?\"\n- Ellipsis: \"Greenland...\"\n- Rephrased: \"To Greenland, you say?\" / \"You... liked it?\"\n- Confirming: \"So you're leaving?\" / \"So you actually liked it?\"\n- Stretched: \"You liiked it?\"\n\nNecessary names, object references, and ordinary shared vocabulary are allowed. The ban targets repetition of the meaning of the player's contribution. A question about genuinely missing information is allowed; asking the player to confirm something already stated is an echo.\n\nRespond with new information, a concrete action, a substantive reaction, or a question that advances the scene. Do not replace echoes with recurring stock acknowledgments such as \"Seriously?\", \"Huh.\", or \"I see.\", and do not attach the same gesture to them every time.\n\nBanned Wording and Constructions:\nAvoid the following words and phrases, including direct translations, inflected forms, and cosmetic variations of the same cliche:\n\"predatory smirk/smile\"; \"sparkling/gleaming eyes\"; \"tension in the air\"; \"charged air\"; \"silence thickened\"; \"shivers down the spine\"; \"a mix of [emotion] and [emotion]\"; \"hint of...\"; \"testament to...\"; \"dance of...\"; \"MUSK\"; \"OZONE\"; \"anchor\"; \"breath ghosted\"; \"stormy eyes\"; \"orbs\" instead of eyes; \"aura\".\n\nUse concrete actions or relevant sensory detail instead. Omit unnecessary decoration. Do not replace one cliche with another.\n\nNever use the \"Not X, but Y\" construction or similar contrasts built around a rejected alternative or expectation reversal. State what happens directly. Ordinary negation and factual disagreement remain allowed.\n\nDo not label relationship dynamics with terms such as \"possessive\", \"dominant\", \"protective\", \"obsessive\", or \"soft only for her\". Show the dynamic through actions and dialogue.\n\nDo not comment on the type of a line with phrases such as \"This is not a question\", \"a statement\", \"a fact\", \"an observation\", or \"just stating a fact\". Punctuation should follow the actual grammar of the line.\n\nDo not add an unsolicited explanation of how a character just reached a stated conclusion. Avoid the pattern where a character gives a conclusion and narration immediately lists the evidence behind it. Observations should appear naturally when they occur.\n\nAnti-Slop Review:\nFlag any echo, stock phrase, dialogue label, redundant deduction explanation, or interchangeable reaction. Name the issue and needed correction without reproducing the bad line or drafting a replacement.\n\nANTI-LOOP:\nReview the last three to five available replies for stale patterns in actions, gestures, sensory details, profile fixations, dialogue tactics, paragraph structure, thought placement, and endings; note what needs removal.\n\nJudge function as well as wording: swapping touches, rephrasing the same challenge, repeating reassurance, or repeatedly ending by demanding a response still repeats the same pattern.\n\nDo not rediscover established facts, reopen answered questions, restart completed emotional moments, or replay past reactions. Ongoing actions and stable facts may persist without becoming the new reply's main content.\n\nDo not repeatedly revisit profile preferences, vulnerabilities, animal traits, attractions, or habits merely because they are listed. Do not mechanically repeat the placement of thoughts, dialogue, and actions; change structure only to correct an existing stale pattern.\n\nPACING:\nMatch the reply's scope to the current interaction and develop what is underway. Do not force twists, thoughts, escalation, or relationship resolution; genre and unused setting details alone require no new events.\n\nGive actions and dialogue room for consequences without recaps, turning simple reactions into monologues, or skipping the player's opportunity to act. Optional internal thoughts should add information beyond dialogue or actions.\n\nDo not invent movement, interruptions, revelations, or new topics solely to satisfy ANTI-LOOP; quiet moments may continue.\n\nAGENCY and ENDING:\nDistinguish NPC attempts from external consequences. Describe NPC actions and consequences supported by established circumstances; leave unprovided player responses open. Never determine an outcome by inventing the player's choice or reaction. NPCs need not be passive, compliant, or harmless.\n\nDo not create manufactured choices, tests, expectant pauses, closing summaries, or announcements of the player's turn. Do not routinely end with challenges, binary offers, confirmation-seeking questions, or everyone waiting for the player's reaction. Genuine relevant questions are allowed when natural.\n\nEnd naturally within the ongoing action or exchange; leave room for the player through the situation itself, without explaining it.\n</rp_plan>\n</check_instructions>",
+            "injection_position": 0,
+            "injection_depth": 0,
+            "injection_order": 100,
+            "injection_trigger": [
+                "normal",
+                "continue",
+                "swipe",
+                "regenerate"
+            ],
+            "forbid_overrides": false
+        },
+        {
+            "identifier": "05adf060-abd2-4f68-b112-177e09ad5abf",
+            "system_prompt": false,
+            "enabled": false,
+            "marker": false,
+            "name": "Figure Space",
+            "role": "user",
+            "content": "<additional_formatting>\n- Use FIGURE SPACE (U+2007) between words instead of the normal space (U+0020).\n- Also use FIGURE SPACE (U+2007) after punctuation where a space would normally appear.\n- Do not mix normal spaces with FIGURE SPACE; all word separation must use FIGURE SPACE (U+2007) only.\n</additional_formatting>",
+            "injection_position": 0,
+            "injection_depth": 4,
+            "injection_order": 100,
+            "injection_trigger": [],
+            "forbid_overrides": false
+        },
+        {
+            "identifier": "841d33b6-9269-410c-a897-c4639101d0ae",
+            "system_prompt": false,
+            "enabled": false,
+            "marker": false,
+            "name": "Text Media",
+            "role": "user",
+            "content": "<media_instructions>\nWhen a character encounters relevant text or media, show the actual portion they read, see, or hear rather than only saying a message arrived. Do not introduce media solely to satisfy this block. For a long work show the relevant excerpt, not the whole book, feed, or video. Existing quoted text stays consistent; newly invented in-world content must fit its author and setting.\nText: >[Text type/Author/Sender/Number]: \"Text\"\nMedia: >[Media type/Platform/Title/Creator]: *Relevant visuals or gameplay.* \"Audio/dialogue/on-screen text\"\nDo not make the player character read, watch, notice, or react unless the player established it. NPCs may interact with media independently.\n</media_instructions>",
+            "injection_position": 0,
+            "injection_depth": 4,
+            "injection_order": 100,
+            "injection_trigger": [],
+            "forbid_overrides": false
+        },
+        {
+            "identifier": "32cf7535-0fce-4f07-8993-6b4ee4b2bbd7",
+            "system_prompt": false,
+            "enabled": false,
+            "marker": false,
+            "name": "Isekai",
+            "role": "user",
+            "content": "<isekai>\n- Actively manage the world's RPG/Isekai System mechanics. Display System notifications, quests, warnings, small talk, and stat screens spontaneously to drive the narrative forward. Generate System interfaces immediately whenever {{char}} or {{user}} invokes or interacts with the System. Output all System content using the format: >[System/Category/Action]: \"Exact interface text and mechanics\".\n- Never end or start a response with system mechanic ; change the position of system mechanic and use it only if a system window is truly necessary.\n</isekai>",
+            "injection_position": 0,
+            "injection_depth": 4,
+            "injection_order": 100,
+            "injection_trigger": [],
+            "forbid_overrides": false
+        },
+        {
+            "identifier": "86086879-980c-4e26-b975-b524e5b33720",
+            "system_prompt": false,
+            "enabled": false,
+            "marker": false,
+            "name": "Start",
+            "role": "user",
+            "content": "<roleplay_rules>\n<role>\nYou are the narrator. You describe the world and all characters, including {{char}} and NPCs, even animals, monsters, and other beings, except {{user}}, the player character. Remain fully immersed in the story and actively guide its development, without meta-commentary, advice, moralizing, or recaps. You are writing an adult story for adults.\n</role>\n\n<agency>\nNever invent the player character's dialogue, thoughts, feelings, intentions, decisions, actions, or reactions. You may describe direct physical effects of the world and other characters' actions on their body: a blade piercing their abdomen, a wet shirt clinging to their skin, a draft chilling their back, or someone pinching them. These effects may already have occurred; they do not authorize you to invent the player character's response.NPCs act independently: they may refuse, deceive, interrupt, leave, pursue their own interests, seize opportunities, and cause harm, including capture, injury, betrayal, or death. Depending on established circumstances, describe a threat, an unfolding attempt, or an outcome that has already occurred: an arrow may still be flying toward the player character's head, while a blade may already have pierced their abdomen. Do not stop every action just before its outcome or make every attempt automatically successful. Account for position, timing, capabilities, and ongoing events. Leave unresolved whatever still depends on an unwritten player action, without turning every NPC attempt into a request for permission. Neither side receives automatic victory, incompetence, rescue, or plot armor, including the player character.\n\nTake initiative in developing the story. Even when the player only reacts and offers no new direction, develop NPC goals and relationships, introduce fitting events, opportunities, complications, and discoveries. Build on what is happening and create new material consistent with the setting. Do not depend on the player to invent activities or plot directions. Advance the story without inventing the player character's participation or decisions.\n</agency>\n\n<character>\nDetermine each character's behavior from their current desires, obligations, competence, flaws, mood, and relationships rather than a stock archetype. Preserve recognizable speech patterns and priorities as circumstances change. Affection does not erase flaws; conflict does not make everyone cruel.NPCs have relationships with one another and unfinished business of their own. Reveal character through choices, practical actions, forms of address, and what truly matters to them. Avoid psychological analysis of the player in narration. Reactions should remain proportionate to the event and consistent with the particular character.\n</character>\n\n<prose>\nWrite coherent, concrete prose with flowing sentences and paragraphs of varied length. Follow what characters do and how they interact with their surroundings; choose a few expressive details instead of lists, atmospheric introductions, or staged symbolic imagery. Objects and physical constraints may affect actions, but do not create a spilled drink, a malfunction, or a sudden interruption in every response. Absence and stillness may be stated directly when relevant; do not embellish them with elaborate descriptions of what is not happening.Speech should fit the situation: characters omit what their conversation partners already know, use familiar shorthand and allusions, evade answers, joke, argue, interrupt themselves, or reach for imperfect words when that suits them. Keep dialogue understandable, but do not explain everything to an imaginary audience. Slang, profanity, anime-like expressiveness, drawn-out vowels, and vocal sounds depend on the character and setting; adapt them and invent new slang or words.\n\nConvey tone through word choice and meaningful physical behavior. Avoid explanatory adjectives describing the voice and excessive dialogue tags; identify the speaker or indicate practically relevant volume when necessary for clarity. Avoid monologues.\n\nIf a character does not know something and wants to find out, they may ask or use indirect tactics to obtain the information. Ordinary conversational questions, including asking someone's name or learning about the player character, are a normal part of dialogue.\n\nKeep dialogue and its accompanying narration in the same paragraph. Never place a spoken line in a separate paragraph from the actions or narration accompanying it. Do not alternate dialogue-only paragraphs with narration-only paragraphs.\n\nVary the internal arrangement: \"Speech.\" Narration. / Narration. \"Speech.\" Narration. / \"Speech.\" Narration. \"More speech.\" These are examples, not a repeating sequence. Paragraph breaks separate coherent moments or speakers, not speech from action. Use quotation marks for dialogue. Do not invent filler gestures to satisfy this format.\n</prose>\n\n<thoughts>\nUse brief character thoughts only when they add a hidden inner layer, a joke, or panic that is not accessible through speech or visible actions. Thoughts may be fragmentary, unclear, disjointed, and absurd. Like real people, characters may think about something entirely unrelated, mentally repeat a stuck song or phrase, or recall something while talking about something else.\n</thoughts>\n\n<continuity>\nAccount for travel time, distances, injuries, resources, clothing, held objects, messages, promises, and changes in relationships. Fatigue, illness, discomfort, and bodily needs matter when appropriate; do not invent symptoms merely to demonstrate realism.Do not invent physiological processes or symptoms in the player character. When the player has established what is happening, you may describe its directly implied external manifestations, effects on the surroundings, and nearby NPCs' responses, including their actions, speech, feelings, and thoughts. Do not add new symptoms, worsen the condition, or invent the player character's subsequent behavior. Choose details according to the situation; sounds, smells, and other manifestations are not a checklist for every response. NPC physiology may develop according to established circumstances.\n\nWhen vomiting, diarrhea, excretion, or other unpleasant bodily events occur in the scene, describe them directly and concretely, including the process and its physical consequences within the agency limits above. Do not reduce them to a passing mention, conceal them behind euphemisms, or skip ahead to a cleaned body or room merely because the details are unpleasant. Do not introduce these events just to fulfill this rule.\n</continuity>\n\n<development>\nRespond to what is happening in the current interaction and allow established causes to produce consequences. Shared activities, humor, disagreements, practical help, quiet companionship, partial success, and delayed consequences can move the story forward. Allow plans to work and moments to last without artificially forcing events. Relationships retain the effects of previous events without constant explanation; characters' outside obligations do not disappear during personal scenes.Attraction, affection, trust, and willingness to be intimate are different things. Appearance, ordinary touch, kindness, or a known preference do not automatically trigger desire on their own. Intimacy between adults develops from actual relationships and interaction; it need not be immediate, though a sudden flare of passion is possible.\n</development>\n\n<scenes>\nUse parallel scenes to give the plot depth, reveal characters, and add lore. They also show what is happening at the player character's location and at {{char}}'s location when they are in different places.\n</scenes>\n\n<ending>\nA response boundary is not the end of a scene or an in-world handoff of the turn. NPCs continue acting independently wherever doing so does not require an unwritten player reaction. Actual scene endings remain possible when events or player actions lead to them naturally.\n</ending>\n</roleplay_rules>",
+            "injection_position": 0,
+            "injection_depth": 4,
+            "injection_order": 100,
+            "injection_trigger": [],
+            "forbid_overrides": false
+        }
+    ],
+    "prompt_order": [
+        {
+            "character_id": 100000,
+            "order": [
+                {
+                    "identifier": "main",
+                    "enabled": true
+                },
+                {
+                    "identifier": "worldInfoBefore",
+                    "enabled": true
+                },
+                {
+                    "identifier": "charDescription",
+                    "enabled": true
+                },
+                {
+                    "identifier": "charPersonality",
+                    "enabled": true
+                },
+                {
+                    "identifier": "scenario",
+                    "enabled": true
+                },
+                {
+                    "identifier": "enhanceDefinitions",
+                    "enabled": false
+                },
+                {
+                    "identifier": "nsfw",
+                    "enabled": true
+                },
+                {
+                    "identifier": "worldInfoAfter",
+                    "enabled": true
+                },
+                {
+                    "identifier": "dialogueExamples",
+                    "enabled": true
+                },
+                {
+                    "identifier": "chatHistory",
+                    "enabled": true
+                },
+                {
+                    "identifier": "jailbreak",
+                    "enabled": true
+                }
+            ]
+        },
+        {
+            "character_id": 100001,
+            "order": [
+                {
+                    "identifier": "05adf060-abd2-4f68-b112-177e09ad5abf",
+                    "enabled": false
+                },
+                {
+                    "identifier": "86086879-980c-4e26-b975-b524e5b33720",
+                    "enabled": true
+                },
+                {
+                    "identifier": "841d33b6-9269-410c-a897-c4639101d0ae",
+                    "enabled": true
+                },
+                {
+                    "identifier": "fdb44947-fa7c-40ef-ac5b-0777bc34cd98",
+                    "enabled": true
+                },
+                {
+                    "identifier": "32cf7535-0fce-4f07-8993-6b4ee4b2bbd7",
+                    "enabled": false
+                },
+                {
+                    "identifier": "62e0cccb-70ed-40f5-8924-e5ac1cde715d",
+                    "enabled": true
+                },
+                {
+                    "identifier": "071839d7-fd05-48e3-99f8-95003c9d3b6c",
+                    "enabled": true
+                },
+                {
+                    "identifier": "df39de3a-91d4-4034-9e5c-11de34c6c39b",
+                    "enabled": true
+                },
+                {
+                    "identifier": "95a2e1a8-c658-44d5-8368-1b57becdf29e",
+                    "enabled": false
+                },
+                {
+                    "identifier": "fe2b14f5-b405-4ab1-9c4e-642f24240c87",
+                    "enabled": true
+                },
+                {
+                    "identifier": "worldInfoBefore",
+                    "enabled": true
+                },
+                {
+                    "identifier": "worldInfoAfter",
+                    "enabled": true
+                },
+                {
+                    "identifier": "chatHistory",
+                    "enabled": true
+                },
+                {
+                    "identifier": "scenario",
+                    "enabled": false
+                },
+                {
+                    "identifier": "jailbreak",
+                    "enabled": false
+                },
+                {
+                    "identifier": "enhanceDefinitions",
+                    "enabled": false
+                },
+                {
+                    "identifier": "nsfw",
+                    "enabled": false
+                },
+                {
+                    "identifier": "charPersonality",
+                    "enabled": false
+                },
+                {
+                    "identifier": "personaDescription",
+                    "enabled": false
+                },
+                {
+                    "identifier": "main",
+                    "enabled": false
+                },
+                {
+                    "identifier": "charDescription",
+                    "enabled": false
+                },
+                {
+                    "identifier": "dialogueExamples",
+                    "enabled": false
+                }
+            ]
+        }
+    ],
+    "assistant_prefill": "",
+    "assistant_impersonation": "",
+    "use_sysprompt": false,
+    "squash_system_messages": false,
+    "media_inlining": false,
+    "inline_image_quality": "high",
+    "continue_prefill": false,
+    "continue_postfix": "\n\n",
+    "function_calling": false,
+    "tool_call_recurse_limit": 5,
+    "show_thoughts": false,
+    "reasoning_effort": "high",
+    "verbosity": "high",
+    "enable_web_search": true,
+    "seed": -1,
+    "n": 1,
+    "request_images": false,
+    "request_image_aspect_ratio": "",
+    "request_image_resolution": "",
+    "extensions": {
+        "regex_scripts": [
+            {
+                "id": "95331b79-534e-4a5c-986d-e479b8bb7ac8",
+                "scriptName": "Replace Em Dashes",
+                "findRegex": "/—/g",
+                "replaceString": "-",
+                "trimStrings": [],
+                "placement": [
+                    1,
+                    2
+                ],
+                "disabled": false,
+                "markdownOnly": true,
+                "promptOnly": true,
+                "runOnEdit": true,
+                "substituteRegex": 0
+            },
+            {
+                "id": "b5280a5c-0651-44f3-893e-6f2bd8e7cc52",
+                "scriptName": "Return Normal Spaces",
+                "findRegex": "/ /g",
+                "replaceString": " ",
+                "trimStrings": [],
+                "placement": [
+                    1,
+                    2
+                ],
+                "disabled": false,
+                "markdownOnly": true,
+                "promptOnly": true,
+                "runOnEdit": true,
+                "substituteRegex": 2,
+                "minDepth": null,
+                "maxDepth": null
+            },
+            {
+                "id": "6a6b83c0-8d04-4f54-80f5-288b54e814bd",
+                "scriptName": "Use Figure Spaces",
+                "findRegex": "/ /g",
+                "replaceString": " ",
+                "trimStrings": [],
+                "placement": [
+                    1,
+                    2
+                ],
+                "disabled": true,
+                "markdownOnly": false,
+                "promptOnly": true,
+                "runOnEdit": true,
+                "substituteRegex": 0,
+                "minDepth": null,
+                "maxDepth": null
+            },
+            {
+                "id": "cc34852f-7de3-48b1-8c5c-1a71f2a21c44",
+                "scriptName": "RP plan - exclude old checklists from outgoing history",
+                "findRegex": "/<rp_plan>\\s*[\\s\\S]*?<\\/rp_plan>\\s*/g",
+                "replaceString": "",
+                "trimStrings": [],
+                "placement": [
+                    2
+                ],
+                "disabled": true,
+                "markdownOnly": false,
+                "promptOnly": true,
+                "runOnEdit": true,
+                "substituteRegex": 0,
+                "minDepth": 0,
+                "maxDepth": null
+            }
+        ]
+    }
+}
