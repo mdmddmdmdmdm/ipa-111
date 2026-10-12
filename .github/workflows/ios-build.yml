@@ -110,10 +110,13 @@ jobs:
               fi
             fi
 
-            # Safety net: fix dynamic assignment in crushon_login_sheet.dart
-            # Cookie.value is dynamic; assign to String? requires an explicit cast.
+            # Safety net: fix dynamic Cookie.value usage in crushon_login_sheet.dart
+            # Cookie.value is dynamic in flutter_inappwebview; .trim()/.isEmpty and
+            # assignment to String? need an explicit cast.
             CLS=lib/features/catalog/widgets/crushon_login_sheet.dart
             if [ -f "$CLS" ]; then
+              # final value = c.value.trim();  ->  final value = (c.value as String).trim();
+              perl -0pi -e 's/final\s+value\s*=\s*c\.value\.trim\(\)/final value = (c.value as String).trim()/g' "$CLS" || true
               # displayName ??= c.value;  ->  displayName ??= c.value as String?;
               perl -0pi -e 's/(displayName\s*\?\?=\s*c\.value)(\s*;)/$1 as String?$2/g' "$CLS" || true
               # also cover a plain assignment if present
