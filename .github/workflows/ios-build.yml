@@ -108,42 +108,8 @@ jobs:
               perl -0pi -e 's/(String\?\s+[a-zA-Z0-9_]+\s*=\s*[^;]+)(;)/$1 as String?$2/g' "$CLS" || true
             fi
 
-            # Safety net: add missing nextMessage parameter to mock/stub generation services using Python for precise syntax handling
-            python3 - << 'EOF'
-            import glob
-
-            for filepath in glob.glob('test/**/*_test.dart', recursive=True) + glob.glob('lib/**/*.dart', recursive=True):
-                try:
-                    with open(filepath, 'r', encoding='utf-8') as f:
-                        content = f.read()
-                    if 'ChatGenerationService' in content and 'Future<ChatState> generate({' in content and 'nextMessage' not in content:
-                        idx = 0
-                        while True:
-                            idx = content.find('Future<ChatState> generate({', idx)
-                            if idx == -1:
-                                break
-                            brace_count = 0
-                            end_idx = -1
-                            for i in range(idx, len(content)):
-                                if content[i] == '{':
-                                    brace_count += 1
-                                elif content[i] == '}':
-                                    brace_count -= 1
-                                    if brace_count == 0:
-                                        end_idx = i
-                                        break
-                            if end_idx != -1:
-                                content = content[:end_idx] + ', bool nextMessage = false' + content[end_idx:]
-                                idx = end_idx + len(', bool nextMessage = false')
-                            else:
-                                idx += 1
-                        with open(filepath, 'w', encoding='utf-8') as f:
-                            f.write(content)
-                except Exception as e:
-                    print(f"Error processing {filepath}: {e}")
-            EOF
-
             # Safety net: flutter_inappwebview 6.2 passes JavaScriptHandlerFunctionData
+            # (not a bare List) to addJavaScriptHandler callbacks. Fix `callback: (args) {`.
             { grep -rl --include=*.dart 'callback: (args) {' lib 2>/dev/null || true; } | while IFS= read -r F; do
               if grep -q 'package:flutter_inappwebview/' "$F" && ! grep -q 'List<dynamic> args) callback' "$F"; then
                 echo "Patching JS handler callback in $F"
@@ -151,7 +117,8 @@ jobs:
               fi
             done
 
-            # Safety net: a multi-line string call closed with `""")` and no `;` right before `} catch`
+            # Safety net: a multi-line string call closed with `""")` and no `;` right
+            # before `} catch` (the SpicyChat login sheet bug that broke build_runner).
             { grep -rl --include=*.dart '^""")[[:space:]]*$' lib 2>/dev/null || true; } | while IFS= read -r F; do
               perl -0pi -e 's/^("""\))[ \t]*\n(\s*\} catch)/$1;\n$2/mg' "$F"
             done
@@ -227,6 +194,31 @@ jobs:
             if [ -f yarn.lock ]; then yarn install; elif [ -f package-lock.json ]; then npm ci; else npm install; fi
           fi
 
+          if [ -f package.json ] && grep -q '"expo"' package.json && [ -z "$(find_first '*.xcodeproj')" ]; then
+            npx expo prebuild --platform ios --no-install
+          fi
+
+          if ls capacitor.config.* >/dev/null 2>&1; then
+            if grep -q '"build"' package.json; then npm run build; fi
+            if [ -z "$(find_first '*.xcodeproj')" ]; then npx cap add ios; fi
+            npx cap sync ios
+          fi
+
+          if [ -z "$(find_first '*.xcodeproj')" ]; then
+            SPEC=$(find_first "project.yml")
+            [ -z "$SPEC" ] && SPEC=$(find_first "project.yaml")
+            if [ -n "$SPEC" ]; then
+              command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
+              (cd "$(dirname "$SPEC")" && xcodegen generate --spec "$(basename "$SPEC")")
+            fi
+          fi
+
+          PODFILE=$(find_first "Podfile")
+          if [ -n "$PODFILE" ]; then
+            cd "$(dirname "$PODFILE")"
+            pod install || pod install --repo-update
+          fi
+
       - name: Build unsigned app and package IPA
         env:
           DOTENV_CONTENT: ${{ secrets.DOTENV_CONTENT }}
@@ -277,6 +269,8 @@ jobs:
             echo "Analyzer errors (if any):"
             grep -E "^\s*error" "$ROOT/build/analyze.log" | head -60 || true
 
+            # Fail fast: an error in lib/ will break the Xcode build anyway, and
+            # Flutter then reports a misleading "Development Team" signing message.
             if grep -E "^\s*error .*• lib/" "$ROOT/build/analyze.log" >/dev/null 2>&1; then
               echo "::error::Dart analyzer found errors in lib/ - fix these before building."
               exit 1
@@ -292,6 +286,12 @@ jobs:
               APP_PATH=$(find build/ios/iphoneos -maxdepth 1 -name "*.app" | head -1 || true)
               [ -n "$APP_PATH" ] && APP_PATH="$PWD/$APP_PATH"
             else
+              if grep -q -E "\.dart:[0-9]+:[0-9]+: Error" "$ROOT/build/flutter_build.log"; then
+                echo "Dart compile errors:"
+                grep -E "\.dart:[0-9]+:[0-9]+: Error" "$ROOT/build/flutter_build.log" | sort -u | head -60 || true
+                exit "$BUILD_STATUS"
+              fi
+
               flutter build ios --config-only --release --no-codesign > "$ROOT/build/flutter_config.log" 2>&1 || true
 
               set +e
@@ -319,33 +319,50 @@ jobs:
               APP_PATH=$(find "$ROOT/build/derived/Build/Products" -maxdepth 2 -name "*.app" -path "*iphoneos*" | head -1 || true)
             fi
           else
-            SPEC=$(find_first "project.yml")
-            [ -z "$SPEC" ] && SPEC=$(find_first "project.yaml")
-            if [ -n "$SPEC" ]; then
-              command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
-              (cd "$(dirname "$SPEC")" && xcodegen generate --spec "$(basename "$SPEC")")
-            fi
+            PROJECT="${XCODE_PROJECT:-}"
+            [ -z "$PROJECT" ] && PROJECT=$(find_first "*.xcodeproj")
 
             WORKSPACE="${XCODE_WORKSPACE:-}"
-            PROJECT="${XCODE_PROJECT:-}"
-            [ -z "$PROJECT" ] && [ -z "$WORKSPACE" ] && PROJECT=$(find_first "*.xcodeproj")
-            [ -z "$WORKSPACE" ] && [ -n "$PROJECT" ] && [ -d "${PROJECT\%.xcodeproj}.xcworkspace" ] && WORKSPACE="${PROJECT%.xcodeproj}.xcworkspace"
+            if [ -z "$WORKSPACE" ] && [ -n "$PROJECT" ]; then
+              CANDIDATE="${PROJECT%.xcodeproj}.xcworkspace"
+              [ -d "$CANDIDATE" ] && WORKSPACE="$CANDIDATE"
+            fi
+
+            PACKAGE_DIR=""
+            if [ -z "$PROJECT" ] && [ -z "$WORKSPACE" ]; then
+              PKG=$(find_first "Package.swift")
+              [ -n "$PKG" ] && PACKAGE_DIR=$(dirname "$PKG")
+            fi
+
+            SCHEME="${XCODE_SCHEME:-}"
+            if [ -n "$SCHEME" ]; then
+              if [ -n "$PROJECT" ]; then
+                LIST=$(xcodebuild -list -json -project "$PROJECT")
+              elif [ -n "$WORKSPACE" ]; then
+                LIST=$(xcodebuild -list -json -workspace "$WORKSPACE")
+              else
+                LIST=$(cd "$PACKAGE_DIR" && xcodebuild -list -json)
+              fi
+              SCHEME=$(echo "$LIST" \vert{} jq -r '(.project.schemes // .workspace.schemes // []) \vert{} map(select(test("Tests$|^Pods-") | not)) | .[0] // empty')
+            fi
 
             BUILD_ARGS=(
-              -scheme "${XCODE_SCHEME:-Runner}"
+              -scheme "$SCHEME"
               -configuration Release
               -sdk iphoneos
-              -destination 'generic/platform=iOS' \
-              -derivedDataPath "$ROOT/build/derived" \
-              CODE_SIGNING_ALLOWED=NO \
-              CODE_SIGNING_REQUIRED=NO \
+              -destination 'generic/platform=iOS'
+              -derivedDataPath "$ROOT/build/derived"
+              CODE_SIGNING_ALLOWED=NO
+              CODE_SIGNING_REQUIRED=NO
               CODE_SIGN_IDENTITY=""
             )
 
             if [ -n "$WORKSPACE" ]; then
               xcodebuild build -workspace "$WORKSPACE" "${BUILD_ARGS[@]}"
-            else
+            elif [ -n "$PROJECT" ]; then
               xcodebuild build -project "$PROJECT" "${BUILD_ARGS[@]}"
+            else
+              (cd "$PACKAGE_DIR" && xcodebuild build "${BUILD_ARGS[@]}")
             fi
 
             APP_PATH=$(find "$ROOT/build/derived/Build/Products" -maxdepth 2 -name "*.app" -path "*iphoneos*" | head -1 || true)
