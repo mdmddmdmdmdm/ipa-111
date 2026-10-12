@@ -1,0 +1,71 @@
+  0s compiling builders/aot
+  2s compiling builders/aot
+  3s compiling builders/aot
+  4s compiling builders/aot
+  5s compiling builders/aot
+  6s compiling builders/aot
+  7s compiling builders/aot
+  8s compiling builders/aot
+  9s compiling builders/aot
+  10s compiling builders/aot
+  11s compiling builders/aot
+  12s compiling builders/aot
+  13s compiling builders/aot
+  14s compiling builders/aot
+  15s compiling builders/aot
+  16s compiling builders/aot
+  18s compiling builders/aot
+  19s compiling builders/aot
+  20s compiling builders/aot
+  21s compiling builders/aot
+  22s compiling builders/aot
+  23s compiling builders/aot
+  24s compiling builders/aot
+  25s compiling builders/aot
+  26s compiling builders/aot
+  27s compiling builders/aot
+  28s compiling builders/aot
+  29s compiling builders/aot
+  30s compiling builders/aot
+  31s compiling builders/aot
+  0s freezed on 1685 inputs; lib/app.dart
+W SDK language version 3.13.0 is newer than `analyzer` language version 3.12.0. Run `flutter packages upgrade`.
+  1s freezed on 1685 inputs: 1 no-op; spent 1s sdk; lib/core/app_runtime.dart
+  4s freezed on 1685 inputs: 9 no-op; spent 2s analyzing, 1s sdk; lib/core/db/migrations/database_integrity.dart
+  9s freezed on 1685 inputs: 55 no-op; spent 6s analyzing, 1s sdk, 1s resolving; lib/core/db/repositories/memory_cadence_repo.dart
+  10s freezed on 1685 inputs: 1 output, 299 no-op; spent 7s analyzing, 1s sdk, 1s resolving; lib/core/models/card_evolution_observation.dart
+  12s freezed on 1685 inputs: 22 output, 322 no-op; spent 8s analyzing, 1s sdk, 1s resolving; lib/core/navigation/router.dart
+  13s freezed on 1685 inputs: 24 output, 540 no-op; spent 9s analyzing, 1s sdk, 1s resolving; lib/features/character_list/widgets/add_to_folder_sheet.dart
+  15s freezed on 1685 inputs: 25 output, 566 no-op; spent 11s analyzing, 2s resolving, 1s sdk; lib/features/chat/bridge/chat_webview_keep_alive.dart
+  16s freezed on 1685 inputs: 25 output, 631 no-op; spent 12s analyzing, 2s resolving, 1s sdk; lib/features/chat/services/summary_generation_service.dart
+  20s freezed on 1685 inputs: 25 output, 729 no-op; spent 15s analyzing, 2s resolving, 1s sdk; lib/features/chat/widgets/quick_replies_panel.dart
+  21s freezed on 1685 inputs: 35 output, 1016 no-op; spent 15s analyzing, 2s resolving, 1s sdk; lib/shared/shell/desktop/desktop_glossary_popup.dart
+  22s freezed on 1685 inputs: 36 output, 1310 no-op; spent 16s analyzing, 2s resolving, 1s sdk; test/fallback_prompt_reasoning_budget_test.dart
+  23s freezed on 1685 inputs: 36 output, 1649 no-op; spent 17s analyzing, 2s resolving, 1s sdk
+  0s json_serializable on 3370 inputs; lib/app.dart
+  9s json_serializable on 3370 inputs: 1 no-op; spent 8s analyzing; lib/app.freezed.dart
+  10s json_serializable on 3370 inputs: 765 skipped, 23 output, 793 no-op; spent 8s analyzing; lib/features/cloud_sync/adapters/ext_blocks_sync_stores.freezed.dart
+  11s json_serializable on 3370 inputs: 1325 skipped, 31 output, 1367 no-op; spent 9s analyzing, 1s resolving; test/glass_surface_border_test.freezed.dart
+  12s json_serializable on 3370 inputs: 1625 skipped, 31 output, 1667 no-op; spent 9s analyzing, 1s resolving, 1s building; test/tab_scroll_memory_test.freezed.dart
+  12s json_serializable on 3370 inputs: 1649 skipped, 31 output, 1690 no-op; spent 10s analyzing, 1s resolving, 1s building
+  0s drift_dev on 13480 inputs; lib/app.dart
+  3s drift_dev on 13480 inputs: 78 skipped, 79 output; spent 3s analyzing; lib/core/db/tables.freezed.dart
+  4s drift_dev on 13480 inputs: 739 skipped, 790 output; spent 4s analyzing; lib/features/chat/widgets/requests/request_body_view.freezed.dart
+  5s drift_dev on 13480 inputs: 1596 skipped, 1669 output; spent 4s analyzing, 1s building; test/studio_preset_block_reorder_test.freezed.dart
+  51s drift_dev on 13480 inputs: 1657 skipped, 1724 output, 6 no-op; spent 50s analyzing, 1s building; lib/core/db/app_db.freezed.dart
+  55s drift_dev on 13480 inputs: 1688 skipped, 1742 output, 19 no-op; spent 53s analyzing, 1s building; lib/core/db/repositories/embedding_repo.freezed.dart
+  57s drift_dev on 13480 inputs: 1689 skipped, 1743 output, 19 no-op; spent 56s analyzing, 1s building; lib/core/db/repositories/extension_presets_repository.freezed.dart
+  61s drift_dev on 13480 inputs: 1692 skipped, 1746 output, 19 no-op; spent 59s analyzing, 1s building; lib/core/db/repositories/info_blocks_repository.freezed.dart
+  64s drift_dev on 13480 inputs: 1703 skipped, 1757 output, 19 no-op; spent 62s analyzing, 1s building; lib/core/db/repositories/memory_book_repo.freezed.dart
+  66s drift_dev on 13480 inputs: 1722 skipped, 1776 output, 19 no-op; spent 64s analyzing, 1s building; lib/core/db/repositories/summary_repo.freezed.dart
+  99s drift_dev on 13480 inputs: 1727 skipped, 1780 output, 20 no-op; spent 98s analyzing, 1s building; lib/core/db/tables.freezed.dart
+  100s drift_dev on 13480 inputs: 2853 skipped, 2848 output, 150 no-op; spent 98s analyzing, 2s building; test/characterization/memory_salience_scorer_test.freezed.dart
+  104s drift_dev on 13480 inputs: 3298 skipped, 3292 output, 151 no-op; spent 102s analyzing, 2s building; lib/app.dart.types.temp.dart
+  105s drift_dev on 13480 inputs: 3322 skipped, 3293 output, 158 no-op; spent 102s analyzing, 3s building; lib/core/db/app_db.dart.types.temp.dart
+  106s drift_dev on 13480 inputs: 4909 skipped, 3298 output, 714 no-op; spent 102s analyzing, 4s building; lib/features/catalog/widgets/provider_auto_login_sheet.dart.types.temp.dart
+  107s drift_dev on 13480 inputs: 6811 skipped, 3298 output, 1364 no-op; spent 102s analyzing, 5s building; test/blurred_image_test.dart.types.temp.dart
+  108s drift_dev on 13480 inputs: 8080 skipped, 3298 output, 1787 no-op; spent 102s analyzing, 5s building; test/stream_accumulator_test.dart.types.temp.dart
+  108s drift_dev on 13480 inputs: 8317 skipped, 3298 output, 1865 no-op; spent 102s analyzing, 6s building
+  0s source_gen:combining_builder on 6740 inputs; lib/app.dart
+  0s source_gen:combining_builder on 6740 inputs: 5019 skipped, 37 output, 1684 no-op
+  Built with build_runner/aot in 178s; wrote 3402 outputs.

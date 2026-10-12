@@ -40,7 +40,7 @@ jobs:
             else
               while IFS= read -r f; do
                 f="${f#./}"
-                VER=$(printf '%s' "$f" \vert{} grep -oiE '(^\vert{}[^A-Za-z0-9])(version\vert{}ver\vert{}v)[^A-Za-z0-9]*[0-9]+' \vert{} head -1 \vert{} grep -oE '[0-9]+$' || true)
+                VER=$(printf '%s' "$f" | grep -oiE '(^|[^A-Za-z0-9])(version|ver|v)[^A-Za-z0-9]*[0-9]+' | head -1 | grep -oE '[0-9]+$' || true)
                 [ -z "$VER" ] && VER=0
                 TS=$(git log -1 --format=%ct -- "$f" 2>/dev/null || true)
                 [ -z "$TS" ] && TS=0
@@ -96,17 +96,43 @@ jobs:
               perl -0pi -e 's/^CatalogSearchResult _jannyResult\(Map<String, dynamic> data\) \{/Future<CatalogSearchResult> _jannyResult(Map<String, dynamic> data) async {/m; s/return _jannyResult\(await _jannyMultiSearch\(attempts\[i\]\)\);/return await _jannyResult(await _jannyMultiSearch(attempts[i]));/' "$JP"
             fi
 
-            # Safety net: add wildcard or crushon case to catalog_onboarding_sheet.dart switches
+            # Safety net: add crushon case to catalog_onboarding_sheet.dart switch expressions
+            # (enum gained crushon; switches use => not : and must be exhaustive)
             COS=lib/features/catalog/widgets/catalog_onboarding_sheet.dart
             if [ -f "$COS" ] && grep -q 'ThirdPartyProvider' "$COS" && ! grep -q 'crushon' "$COS"; then
-              perl -0pi -e 's/ThirdPartyProvider\.chub:\s*([^\n]+)/ThirdPartyProvider.chub: $1,\n        ThirdPartyProvider.crushon: $1/g' "$COS" || true
+              # Label switch: insert CrushOn after chub
+              perl -0pi -e "s/(ThirdPartyProvider\.chub\s*=>\s*'catalog_provider_chub_label'\.tr\(\),)/\$1\n  ThirdPartyProvider.crushon => 'CrushOn',/g" "$COS" || true
+              # Description switch: insert CrushOn after chub
+              perl -0pi -e "s/(ThirdPartyProvider\.chub\s*=>\s*'third_party_chub_desc'\.tr\(\),)/\$1\n  ThirdPartyProvider.crushon => 'Browse CrushOn characters.',/g" "$COS" || true
+              # Fallback: any remaining chub arm without a following crushon
+              if ! grep -q 'ThirdPartyProvider.crushon' "$COS"; then
+                perl -0pi -e 's/(ThirdPartyProvider\.chub\s*=>\s*)([^\n,]+)(,)?/$1$2$3\n  ThirdPartyProvider.crushon => $2,/g' "$COS" || true
+              fi
             fi
 
             # Safety net: fix dynamic assignment in crushon_login_sheet.dart
+            # Cookie.value is dynamic; assign to String? requires an explicit cast.
             CLS=lib/features/catalog/widgets/crushon_login_sheet.dart
             if [ -f "$CLS" ]; then
-              perl -0pi -e 's/(String\?\s+[a-zA-Z0-9_]+\s*=\s*[^;]+)(;)/$1 as String?$2/g' "$CLS" || true
+              # displayName ??= c.value;  ->  displayName ??= c.value as String?;
+              perl -0pi -e 's/(displayName\s*\?\?=\s*c\.value)(\s*;)/$1 as String?$2/g' "$CLS" || true
+              # also cover a plain assignment if present
+              perl -0pi -e 's/(String\?\s+displayName\s*=\s*c\.value)(\s*;)/$1 as String?$2/g' "$CLS" || true
             fi
+
+            # Safety net: test stubs missing bool nextMessage on ChatGenerationService.generate
+            # (added to the base class; overrides must match). Only touches test/ files.
+            { grep -rl --include='*_test.dart' 'extends ChatGenerationService' test 2>/dev/null || true; } | while IFS= read -r F; do
+              if grep -q 'Future<ChatState> generate(' "$F" && ! grep -q 'nextMessage' "$F"; then
+                echo "Patching missing nextMessage in $F"
+                # Insert "bool nextMessage = false," after continueTargetId line if present
+                perl -0pi -e 's/(String\?\s+continueTargetId,)(\s*)/$1\n    bool nextMessage = false,$2/g' "$F" || true
+                # Fallback: after guidanceType line
+                if ! grep -q 'nextMessage' "$F"; then
+                  perl -0pi -e 's/(String\s+guidanceType\s*=\s*'\''GENERATION'\'',)(\s*)/$1\n    bool nextMessage = false,$2/g' "$F" || true
+                fi
+              fi
+            done
 
             # Safety net: flutter_inappwebview 6.2 passes JavaScriptHandlerFunctionData
             # (not a bare List) to addJavaScriptHandler callbacks. Fix `callback: (args) {`.
@@ -343,7 +369,7 @@ jobs:
               else
                 LIST=$(cd "$PACKAGE_DIR" && xcodebuild -list -json)
               fi
-              SCHEME=$(echo "$LIST" \vert{} jq -r '(.project.schemes // .workspace.schemes // []) \vert{} map(select(test("Tests$|^Pods-") | not)) | .[0] // empty')
+              SCHEME=$(echo "$LIST" | jq -r '(.project.schemes // .workspace.schemes // []) | map(select(test("Tests$|^Pods-") | not)) | .[0] // empty')
             fi
 
             BUILD_ARGS=(
