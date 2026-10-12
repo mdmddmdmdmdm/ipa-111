@@ -33,14 +33,14 @@ jobs:
           ROOT="$PWD"
           echo "$ROOT" > "$ROOT/.project_root"
 
-          if [ -z "$(find . -maxdepth 1 \( -name '*.xcodeproj' -o -name '*.xcworkspace' -o -name 'Package.swift' -o -name 'pubspec.yaml' -o -name 'package.json' -o -name 'project.yml' \) | head -1)" ]; then
+          if [ -z "$(find . -maxdepth 1 \(-name '*.xcodeproj' -o -name '*.xcworkspace' -o -name 'Package.swift' -o -name 'pubspec.yaml' -o -name 'package.json' -o -name 'project.yml'\) | head -1)" ]; then
             ZIP=""
             if [ -n "$ZIP_NAME" ] && [ -f "$ZIP_NAME" ]; then
               ZIP="$ZIP_NAME"
             else
               while IFS= read -r f; do
                 f="${f#./}"
-                VER=$(printf '%s' "$f" | grep -oiE '(^|[^A-Za-z0-9])(version|ver|v)[^A-Za-z0-9]*[0-9]+' | head -1 | grep -oE '[0-9]+$' || true)
+                VER=$(printf '%s' "$f" \vert{} grep -oiE '(^\vert{}[^A-Za-z0-9])(version\vert{}ver\vert{}v)[^A-Za-z0-9]*[0-9]+' \vert{} head -1 \vert{} grep -oE '[0-9]+$' || true)
                 [ -z "$VER" ] && VER=0
                 TS=$(git log -1 --format=%ct -- "$f" 2>/dev/null || true)
                 [ -z "$TS" ] && TS=0
@@ -94,6 +94,18 @@ jobs:
             JP=lib/features/catalog/services/janny_provider.dart
             if [ -f "$JP" ] && grep -q '^CatalogSearchResult _jannyResult(' "$JP"; then
               perl -0pi -e 's/^CatalogSearchResult _jannyResult\(Map<String, dynamic> data\) \{/Future<CatalogSearchResult> _jannyResult(Map<String, dynamic> data) async {/m; s/return _jannyResult\(await _jannyMultiSearch\(attempts\[i\]\)\);/return await _jannyResult(await _jannyMultiSearch(attempts[i]));/' "$JP"
+            fi
+
+            # Safety net: add wildcard or crushon case to catalog_onboarding_sheet.dart switches
+            COS=lib/features/catalog/widgets/catalog_onboarding_sheet.dart
+            if [ -f "$COS" ] && grep -q 'ThirdPartyProvider' "$COS" && ! grep -q 'crushon' "$COS"; then
+              perl -0pi -e 's/ThirdPartyProvider\.chub:\s*([^\n]+)/ThirdPartyProvider.chub: $1,\n        ThirdPartyProvider.crushon: $1/g' "$COS" || true
+            fi
+
+            # Safety net: fix dynamic assignment in crushon_login_sheet.dart
+            CLS=lib/features/catalog/widgets/crushon_login_sheet.dart
+            if [ -f "$CLS" ]; then
+              perl -0pi -e 's/(String\?\s+[a-zA-Z0-9_]+\s*=\s*[^;]+)(;)/$1 as String?$2/g' "$CLS" || true
             fi
 
             # Safety net: flutter_inappwebview 6.2 passes JavaScriptHandlerFunctionData
@@ -235,7 +247,7 @@ jobs:
               fi
             fi
 
-            if grep -q "build_runner" pubspec.yaml && [ -z "$(find lib \( -name '*.g.dart' -o -name '*.freezed.dart' \) | head -1)" ]; then
+            if grep -q "build_runner" pubspec.yaml && [ -z "$(find lib \(-name '*.g.dart' -o -name '*.freezed.dart'\) | head -1)" ]; then
               dart run build_runner build
             fi
 
@@ -323,7 +335,7 @@ jobs:
             fi
 
             SCHEME="${XCODE_SCHEME:-}"
-            if [ -z "$SCHEME" ]; then
+            if [ -n "$SCHEME" ]; then
               if [ -n "$PROJECT" ]; then
                 LIST=$(xcodebuild -list -json -project "$PROJECT")
               elif [ -n "$WORKSPACE" ]; then
@@ -331,7 +343,7 @@ jobs:
               else
                 LIST=$(cd "$PACKAGE_DIR" && xcodebuild -list -json)
               fi
-              SCHEME=$(echo "$LIST" | jq -r '(.project.schemes // .workspace.schemes // []) | map(select(test("Tests$|^Pods-") | not)) | .[0] // empty')
+              SCHEME=$(echo "$LIST" \vert{} jq -r '(.project.schemes // .workspace.schemes // []) \vert{} map(select(test("Tests$|^Pods-") | not)) | .[0] // empty')
             fi
 
             BUILD_ARGS=(
