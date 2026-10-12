@@ -108,12 +108,40 @@ jobs:
               perl -0pi -e 's/(String\?\s+[a-zA-Z0-9_]+\s*=\s*[^;]+)(;)/$1 as String?$2/g' "$CLS" || true
             fi
 
-            # Safety net: add missing nextMessage parameter to test stub generation services
-            for TF in test/*_test.dart; do
-              if [ -f "$TF" ] && grep -q 'class _.*GenerationService' "$TF" && ! grep -q 'nextMessage' "$TF"; then
-                perl -0pi -e 's/(Future<ChatState> generate\(\{[^}]+)(\})/ $1, bool nextMessage = false$2/g' "$TF" || true
-              fi
-            done
+            # Safety net: add missing nextMessage parameter to mock/stub generation services using Python for precise syntax handling
+            python3 - << 'EOF'
+            import glob
+
+            for filepath in glob.glob('test/**/*_test.dart', recursive=True) + glob.glob('lib/**/*.dart', recursive=True):
+                try:
+                    with open(filepath, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    if 'ChatGenerationService' in content and 'Future<ChatState> generate({' in content and 'nextMessage' not in content:
+                        idx = 0
+                        while True:
+                            idx = content.find('Future<ChatState> generate({', idx)
+                            if idx == -1:
+                                break
+                            brace_count = 0
+                            end_idx = -1
+                            for i in range(idx, len(content)):
+                                if content[i] == '{':
+                                    brace_count += 1
+                                elif content[i] == '}':
+                                    brace_count -= 1
+                                    if brace_count == 0:
+                                        end_idx = i
+                                        break
+                            if end_idx != -1:
+                                content = content[:end_idx] + ', bool nextMessage = false' + content[end_idx:]
+                                idx = end_idx + len(', bool nextMessage = false')
+                            else:
+                                idx += 1
+                        with open(filepath, 'w', encoding='utf-8') as f:
+                            f.write(content)
+                except Exception as e:
+                    print(f"Error processing {filepath}: {e}")
+            EOF
 
             # Safety net: flutter_inappwebview 6.2 passes JavaScriptHandlerFunctionData
             { grep -rl --include=*.dart 'callback: (args) {' lib 2>/dev/null || true; } | while IFS= read -r F; do
@@ -307,10 +335,10 @@ jobs:
               -scheme "${XCODE_SCHEME:-Runner}"
               -configuration Release
               -sdk iphoneos
-              -destination 'generic/platform=iOS'
-              -derivedDataPath "$ROOT/build/derived"
-              CODE_SIGNING_ALLOWED=NO
-              CODE_SIGNING_REQUIRED=NO
+              -destination 'generic/platform=iOS' \
+              -derivedDataPath "$ROOT/build/derived" \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
               CODE_SIGN_IDENTITY=""
             )
 
