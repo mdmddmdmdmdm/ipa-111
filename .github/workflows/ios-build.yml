@@ -111,15 +111,14 @@ jobs:
             fi
 
             # Safety net: fix dynamic Cookie.value usage in crushon_login_sheet.dart
-            # Cookie.value is dynamic in flutter_inappwebview; .trim()/.isEmpty and
-            # assignment to String? need an explicit cast.
+            # Cookie.value is dynamic in flutter_inappwebview; every .trim() / bool
+            # check / String? return needs an explicit cast.
             CLS=lib/features/catalog/widgets/crushon_login_sheet.dart
             if [ -f "$CLS" ]; then
-              # final value = c.value.trim();  ->  final value = (c.value as String).trim();
-              perl -0pi -e 's/final\s+value\s*=\s*c\.value\.trim\(\)/final value = (c.value as String).trim()/g' "$CLS" || true
+              # c.value.trim()  ->  (c.value as String).trim()  (covers all call sites)
+              perl -0pi -e 's/c\.value\.trim\(\)/(c.value as String).trim()/g' "$CLS" || true
               # displayName ??= c.value;  ->  displayName ??= c.value as String?;
               perl -0pi -e 's/(displayName\s*\?\?=\s*c\.value)(\s*;)/$1 as String?$2/g' "$CLS" || true
-              # also cover a plain assignment if present
               perl -0pi -e 's/(String\?\s+displayName\s*=\s*c\.value)(\s*;)/$1 as String?$2/g' "$CLS" || true
             fi
 
