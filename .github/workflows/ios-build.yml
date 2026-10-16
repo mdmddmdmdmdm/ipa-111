@@ -137,6 +137,52 @@ jobs:
 
           echo "Project root: $(cat "$ROOT/.project_root")"
 
+      - name: Resolve project root
+        run: |
+          #!/usr/bin/env bash
+          set -eo pipefail
+
+          ROOT="$PWD"
+          PR="$(cat "$ROOT/.project_root")"
+
+          # The extract step can leave .project_root one level too high (e.g. when the
+          # zip holds the project folder plus other files). If there is no pubspec.yaml
+          # here, look for the real Flutter project underneath instead of letting the
+          # build fall through to the generic Xcode branch (which picked macos/Runner).
+          if [ ! -f "$PR/pubspec.yaml" ]; then
+            FOUND=""
+            # Prefer the shallowest dir that has pubspec.yaml AND ios/Runner.xcodeproj
+            # (ignores nested packages/*/pubspec.yaml).
+            while IFS= read -r f; do
+              d="$(dirname "$f")"
+              if [ -d "$d/ios/Runner.xcodeproj" ]; then FOUND="$d"; break; fi
+            done < <(find "$PR" -maxdepth 4 -name pubspec.yaml \
+                       -not -path '*/.dart_tool/*' -not -path '*/.git/*' -not -path '*/__MACOSX/*' \
+                       -not -path '*/packages/*' -not -path '*/.pub-cache/*' \
+                       | awk '{print gsub("/","/"), $0}' | sort -n | cut -d' ' -f2-)
+
+            # Fallback: shallowest pubspec.yaml of any kind
+            if [ -z "$FOUND" ]; then
+              F=$(find "$PR" -maxdepth 4 -name pubspec.yaml \
+                    -not -path '*/.dart_tool/*' -not -path '*/.git/*' -not -path '*/__MACOSX/*' \
+                    | awk '{print gsub("/","/"), $0}' | sort -n | head -1 | cut -d' ' -f2-)
+              [ -n "$F" ] && FOUND="$(dirname "$F")"
+            fi
+
+            if [ -n "$FOUND" ]; then
+              echo "Re-pointing project root: $PR -> $FOUND"
+              echo "$FOUND" > "$ROOT/.project_root"
+              PR="$FOUND"
+            fi
+          fi
+
+          echo "Project root: $PR"
+          ls -la "$PR" | head -40
+          if [ -f "$PR/pubspec.yaml" ] && [ ! -d "$PR/ios/Runner.xcodeproj" ]; then
+            echo "::error::Flutter project found at $PR but ios/Runner.xcodeproj is missing."
+            exit 1
+          fi
+
       - name: Generate project and install dependencies
         env:
           DOTENV_CONTENT: ${{ secrets.DOTENV_CONTENT }}
@@ -474,7 +520,7 @@ jobs:
             fi
 
             SCHEME="${XCODE_SCHEME:-}"
-            if [ -n "$SCHEME" ]; then
+            if [ -z "$SCHEME" ]; then
               if [ -n "$PROJECT" ]; then
                 LIST=$(xcodebuild -list -json -project "$PROJECT")
               elif [ -n "$WORKSPACE" ]; then
@@ -483,6 +529,11 @@ jobs:
                 LIST=$(cd "$PACKAGE_DIR" && xcodebuild -list -json)
               fi
               SCHEME=$(echo "$LIST" | jq -r '(.project.schemes // .workspace.schemes // []) | map(select(test("Tests$|^Pods-") | not)) | .[0] // empty')
+            fi
+
+            if [ -z "$SCHEME" ]; then
+              echo "::error::Could not determine an Xcode scheme (set XCODE_SCHEME)."
+              exit 1
             fi
 
             BUILD_ARGS=(
