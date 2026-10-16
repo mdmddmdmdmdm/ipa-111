@@ -212,6 +212,14 @@ jobs:
               perl -0pi -e 's/^CatalogSearchResult _jannyResult\(Map<String, dynamic> data\) \{/Future<CatalogSearchResult> _jannyResult(Map<String, dynamic> data) async {/m; s/return _jannyResult\(await _jannyMultiSearch\(attempts\[i\]\)\);/return await _jannyResult(await _jannyMultiSearch(attempts[i]));/' "$JP"
             fi
 
+            # Safety net: `bool get anyActive =` (missing `>`) in prompt_helpers.dart
+            # breaks freezed / json_serializable / drift_dev in build_runner.
+            PH=lib/core/llm/prompt_helpers.dart
+            if [ -f "$PH" ] && grep -qE 'bool get anyActive[[:space:]]*=[[:space:]]*$' "$PH"; then
+              echo "Fixing 'anyActive =' -> '=>' in $PH"
+              perl -0pi -e 's/(bool get anyActive[ \t]*)=([ \t]*\n)/$1=>$2/' "$PH"
+            fi
+
             # Safety net: add crushon case to catalog_onboarding_sheet.dart switch expressions
             # (enum gained crushon; switches use => not : and must be exhaustive)
             COS=lib/features/catalog/widgets/catalog_onboarding_sheet.dart

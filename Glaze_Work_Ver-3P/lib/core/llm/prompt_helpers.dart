@@ -77,7 +77,7 @@ class PromptHelpers {
   PromptHelpers forImpersonation() =>
       copyWith(userAgency: false, userNameAccuracy: false);
 
-  bool get anyActive =
+  bool get anyActive =>
       formatting || userAgency || userNameAccuracy ||
       stayInRole || stayOnStory || limitedKnowledge || thinkFirst || emojis ||
       length != PromptResponseLength.none;

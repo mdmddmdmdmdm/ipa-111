@@ -1,0 +1,104 @@
+  1s compiling builders/aot
+  2s compiling builders/aot
+  3s compiling builders/aot
+  4s compiling builders/aot
+  5s compiling builders/aot
+  6s compiling builders/aot
+  7s compiling builders/aot
+  8s compiling builders/aot
+  9s compiling builders/aot
+  10s compiling builders/aot
+  11s compiling builders/aot
+  12s compiling builders/aot
+  13s compiling builders/aot
+  14s compiling builders/aot
+  16s compiling builders/aot
+  17s compiling builders/aot
+  18s compiling builders/aot
+  19s compiling builders/aot
+  20s compiling builders/aot
+  21s compiling builders/aot
+  22s compiling builders/aot
+  23s compiling builders/aot
+  24s compiling builders/aot
+  25s compiling builders/aot
+  26s compiling builders/aot
+  27s compiling builders/aot
+  28s compiling builders/aot
+  29s compiling builders/aot
+  30s compiling builders/aot
+  31s compiling builders/aot
+  0s freezed on 1719 inputs; lib/app.dart
+W SDK language version 3.13.0 is newer than `analyzer` language version 3.12.0. Run `flutter packages upgrade`.
+  2s freezed on 1719 inputs: 1 no-op; spent 2s sdk; lib/core/app_runtime.dart
+  6s freezed on 1719 inputs: 9 no-op; spent 3s analyzing, 2s sdk; lib/core/db/migrations/database_integrity.dart
+  14s freezed on 1719 inputs: 56 no-op; spent 9s analyzing, 2s sdk, 2s resolving; lib/core/db/repositories/memory_cadence_repo.dart
+  15s freezed on 1719 inputs: 159 no-op; spent 10s analyzing, 2s sdk, 2s resolving; lib/core/llm/lorebook_vector_search.dart
+E freezed on lib/core/llm/prompt_helpers.dart:
+  80:22: Only factory constructor can specify '=' redirection.
+  81:7: Expected to find ';'.
+  81:18: Operator declarations must be preceded by the keyword 'operator'.
+  And 53 more.
+  16s freezed on 1719 inputs: 19 output, 321 no-op; spent 11s analyzing, 2s sdk, 2s resolving; lib/core/models/studio_ledger_export.dart
+  18s freezed on 1719 inputs: 22 output, 329 no-op; spent 12s analyzing, 2s sdk, 2s resolving, 1s reading; lib/core/navigation/router.dart
+  21s freezed on 1719 inputs: 24 output, 561 no-op; spent 14s analyzing, 2s sdk, 2s resolving, 1s reading; lib/features/character_list/widgets/add_to_folder_sheet.dart
+  24s freezed on 1719 inputs: 25 output, 587 no-op; spent 16s analyzing, 3s resolving, 2s sdk, 2s reading; lib/features/chat/bridge/chat_webview_keep_alive.dart
+  25s freezed on 1719 inputs: 25 output, 625 no-op; spent 17s analyzing, 3s resolving, 2s sdk, 2s reading; lib/features/chat/services/image_gen_processor.dart
+  30s freezed on 1719 inputs: 25 output, 751 no-op; spent 21s analyzing, 3s resolving, 2s sdk, 2s reading; lib/features/chat/widgets/quick_replies_panel.dart
+  31s freezed on 1719 inputs: 33 output, 935 no-op; spent 22s analyzing, 3s resolving, 2s sdk, 2s reading, 1s building; lib/features/memory/controllers/memory_book_write_queue.dart
+  32s freezed on 1719 inputs: 36 output, 1141 no-op; spent 23s analyzing, 3s resolving, 2s sdk, 2s reading, 1s building; test/api_connection_tester_test.dart
+  33s freezed on 1719 inputs: 36 output, 1378 no-op; spent 24s analyzing, 3s resolving, 2s sdk, 2s reading, 1s building; test/image_gen_connection_service_test.dart
+  34s freezed on 1719 inputs: 36 output, 1586 no-op; spent 25s analyzing, 3s resolving, 2s sdk, 2s reading, 1s building; test/session_lorebook_embedding_worker_test.dart
+  35s freezed on 1719 inputs: 36 output, 1683 no-op; spent 25s analyzing, 3s resolving, 2s sdk, 2s reading, 1s building
+  0s json_serializable on 3438 inputs; lib/app.dart
+  17s json_serializable on 3438 inputs: 1 no-op; spent 12s analyzing, 2s resolving, 2s reading; lib/app.freezed.dart
+E json_serializable on lib/core/llm/prompt_helpers.dart:
+  80:22: Only factory constructor can specify '=' redirection.
+  81:7: Expected to find ';'.
+  81:18: Operator declarations must be preceded by the keyword 'operator'.
+  And 53 more.
+  18s json_serializable on 3438 inputs: 554 skipped, 23 output, 580 no-op; spent 12s analyzing, 3s resolving, 2s reading; lib/features/character_list/character_editor_screen.freezed.dart
+  19s json_serializable on 3438 inputs: 1090 skipped, 31 output, 1132 no-op; spent 13s analyzing, 3s resolving, 2s reading; lib/shared/widgets/glass_nav_bar.freezed.dart
+  20s json_serializable on 3438 inputs: 1286 skipped, 31 output, 1328 no-op; spent 13s analyzing, 3s resolving, 3s reading, 1s building; test/chub_session_test.freezed.dart
+  21s json_serializable on 3438 inputs: 1433 skipped, 31 output, 1475 no-op; spent 14s analyzing, 3s resolving, 3s reading, 1s building; test/llm/transport/anthropic_chat_transport_test.freezed.dart
+  22s json_serializable on 3438 inputs: 1656 skipped, 31 output, 1698 no-op; spent 15s analyzing, 3s resolving, 3s reading, 1s building; test/sync_session_consistency_repo_test.freezed.dart
+  22s json_serializable on 3438 inputs: 1683 skipped, 31 output, 1724 no-op; spent 15s analyzing, 3s resolving, 3s reading, 1s building
+  0s drift_dev on 13752 inputs; lib/app.dart
+  5s drift_dev on 13752 inputs: 79 skipped, 80 output; spent 4s analyzing; lib/core/db/tables.freezed.dart
+W drift_dev on lib/core/llm/prompt_helpers.dart:
+  Could not resolve Dart library package:glaze_flutter/core/llm/prompt_helpers.dart
+  80:22: Only factory constructor can specify '=' redirection.
+  81:7: Expected to find ';'.
+  81:18: Operator declarations must be preceded by the keyword 'operator'.
+  And 53 more.
+  6s drift_dev on 13752 inputs: 526 skipped, 575 output; spent 5s analyzing; lib/features/catalog/widgets/datacat/datacat_creator_screen.freezed.dart
+  7s drift_dev on 13752 inputs: 966 skipped, 1035 output; spent 5s analyzing, 1s building; lib/features/presets/preset_list_screen.freezed.dart
+  8s drift_dev on 13752 inputs: 1505 skipped, 1578 output; spent 6s analyzing, 2s building; test/message_timestamp_refresh_test.freezed.dart
+  85s drift_dev on 13752 inputs: 1691 skipped, 1758 output, 6 no-op; spent 83s analyzing, 2s building; lib/core/db/app_db.freezed.dart
+  90s drift_dev on 13752 inputs: 1723 skipped, 1776 output, 20 no-op; spent 88s analyzing, 2s building; lib/core/db/repositories/embedding_repo.freezed.dart
+  96s drift_dev on 13752 inputs: 1724 skipped, 1777 output, 20 no-op; spent 94s analyzing, 2s building; lib/core/db/repositories/extension_presets_repository.freezed.dart
+  103s drift_dev on 13752 inputs: 1727 skipped, 1780 output, 20 no-op; spent 101s analyzing, 2s building; lib/core/db/repositories/info_blocks_repository.freezed.dart
+  109s drift_dev on 13752 inputs: 1738 skipped, 1791 output, 20 no-op; spent 106s analyzing, 2s building; lib/core/db/repositories/memory_book_repo.freezed.dart
+  115s drift_dev on 13752 inputs: 1757 skipped, 1810 output, 20 no-op; spent 112s analyzing, 2s building; lib/core/db/repositories/summary_repo.freezed.dart
+  187s drift_dev on 13752 inputs: 1762 skipped, 1814 output, 21 no-op; spent 185s analyzing, 2s building; lib/core/db/tables.freezed.dart
+W drift_dev on lib/core/llm/prompt_helpers.dart:
+  Could not resolve Dart library package:glaze_flutter/core/llm/prompt_helpers.dart
+  80:22: Only factory constructor can specify '=' redirection.
+  81:7: Expected to find ';'.
+  81:18: Operator declarations must be preceded by the keyword 'operator'.
+  And 53 more.
+  188s drift_dev on 13752 inputs: 2143 skipped, 2147 output, 115 no-op; spent 185s analyzing, 3s building; lib/features/catalog/catalog_models.freezed.dart
+  189s drift_dev on 13752 inputs: 2639 skipped, 2630 output, 150 no-op; spent 186s analyzing, 3s building; lib/features/picks/widgets/picks_detail_launcher.freezed.dart
+  190s drift_dev on 13752 inputs: 3216 skipped, 3206 output, 155 no-op; spent 186s analyzing, 4s building; test/preset_block_editor_actions_test.freezed.dart
+  201s drift_dev on 13752 inputs: 3366 skipped, 3355 output, 156 no-op; spent 197s analyzing, 4s building; lib/app.dart.types.temp.dart
+  205s drift_dev on 13752 inputs: 3390 skipped, 3356 output, 163 no-op; spent 197s analyzing, 8s building; lib/core/db/app_db.dart.types.temp.dart
+  206s drift_dev on 13752 inputs: 3843 skipped, 3361 output, 309 no-op; spent 197s analyzing, 8s building; lib/core/llm/lorebook_vector_search.dart.types.temp.dart
+  207s drift_dev on 13752 inputs: 4774 skipped, 3361 output, 650 no-op; spent 197s analyzing, 9s building; lib/features/card_rewrite/rewrite_review_provider.dart.types.temp.dart
+  208s drift_dev on 13752 inputs: 5974 skipped, 3361 output, 1062 no-op; spent 198s analyzing, 10s building; lib/features/extensions/services/blocks/js_block_executor.dart.types.temp.dart
+  209s drift_dev on 13752 inputs: 7176 skipped, 3361 output, 1468 no-op; spent 198s analyzing, 11s building; test/chat_draft_controller_test.dart.types.temp.dart
+  210s drift_dev on 13752 inputs: 8085 skipped, 3361 output, 1771 no-op; spent 198s analyzing, 11s building; test/prompt_payload_builder_test.dart.types.temp.dart
+  211s drift_dev on 13752 inputs: 8487 skipped, 3361 output, 1904 no-op; spent 198s analyzing, 12s building
+  0s source_gen:combining_builder on 6876 inputs; lib/app.dart
+  0s source_gen:combining_builder on 6876 inputs: 3011 skipped, 36 output, 1014 no-op; lib/features/regex/regex_sheet.dart.types.temp.dart
+  0s source_gen:combining_builder on 6876 inputs: 5121 skipped, 37 output, 1718 no-op
+  Failed to build with build_runner/aot in 305s; wrote 3465 outputs.
