@@ -1,0 +1,40 @@
+Glaze - character image disappears ("Couldn't load the image") (Ver 14)
+NOT compiled or run (no Flutter SDK in the authoring environment).
+Run: flutter analyze
+
+WHAT WAS FOUND
+  Audited every place that writes, deletes or re-points an avatar (editor, gallery,
+  detail screen, importers, backup/restore, cloud sync, thumbnail migration,
+  startup tasks, iOS native code). Nothing in the app deletes a character's avatar
+  file except deleting that character. Paths are stored relative and rebased onto
+  the current iOS container, DB and images share one folder (Documents/Glaze).
+  So the exact trigger cannot be proven by reading the code. The symptom (row +
+  path survive, full image AND thumbnail both gone) means the loose files are
+  lost or unreachable while glaze.db survives. V12's "restore from thumbnail"
+  could not help because the thumbnail goes with the avatar.
+
+FIX: avatars are now ALSO stored inside the database (the one file that survives)
+  - NEW lib/core/services/avatar_vault.dart: table avatar_vault(owner_id, bytes,
+    updated_at), created with CREATE TABLE IF NOT EXISTS (no drift schema bump,
+    no codegen). Copies over 1.5 MB are stored downscaled (1600px short side);
+    the on-disk original is never touched.
+  - image_storage_service.dart: saveAvatar() mirrors bytes into the vault;
+    restoreAvatarFromVault() rebuilds avatars/<id>.png + thumbnail;
+    deleteAvatar() drops the vault copy.
+  - db_provider.dart: imageStorageProvider attaches the vault.
+  - character_provider.dart: CharactersNotifier.restoreMissingAvatars()
+      * file missing/empty but path set  -> rebuilt from the vault
+      * path lost but vault has a copy   -> file and path restored
+      * file exists but no vault copy    -> copied into the vault (so existing
+        characters are protected from the first launch of this build on)
+    _cleanupFiles() also drops the vault copy when a character is deleted.
+  - character_list_screen.dart: runs the restore pass on open, before the
+    thumbnail backfill, and refreshes the cards if anything was rebuilt.
+
+IMPORTANT
+  - A picture that is ALREADY gone and was never vaulted cannot be recovered by
+    code: re-add it once on this build. From then on it is protected.
+  - Create/re-add the image, fully close the app, reopen: it should still show.
+  - If it still disappears on this build, the picture will now come back on the
+    next open of the Characters tab (that is the signal the files are being
+    lost by the OS / install method rather than by the app).

@@ -1,0 +1,574 @@
+import 'dart:async';
+
+import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../../core/llm/transport/llm_capture_context.dart';
+import '../../../core/llm/history_assembler.dart';
+import '../../../core/models/api_config.dart';
+import '../../../core/models/chat_message.dart';
+import '../../../core/models/character.dart';
+import '../../../core/models/persona.dart';
+import '../../../core/llm/prompt/main_model_context_snapshot.dart';
+import '../../../core/state/db_provider.dart';
+import '../../../core/utils/error_format.dart';
+import '../../image_gen/services/image_tag_markup.dart';
+import '../../settings/api_list_provider.dart';
+import '../models/block_config.dart';
+import '../models/extension_preset.dart';
+import '../models/info_block.dart';
+import '../models/extension_context_policy.dart';
+import 'blocks/block_llm_runner.dart';
+import 'block_content_extractor.dart';
+import 'block_context_builder.dart';
+import 'ext_blocks_prompt_injection.dart';
+import 'macro_expander.dart';
+import 'extension_context_assembler.dart';
+import 'runtime_prompt_injection_service.dart';
+
+final infoBlockServiceProvider = Provider<InfoBlockService>(
+  (ref) => InfoBlockService(ref),
+);
+
+/// Chat text on its way into a block agent's prompt, with every image block
+/// reduced to the tag that asked for the picture.
+///
+/// The stored form of a finished block carries paths into this device's data
+/// root, which mean nothing to a model — and an agent that reads one writes one
+/// back, producing a block that points at files nobody generated (INV-IG12).
+String _withoutImagePaths(String content) =>
+    ImageTagMarkup.reduceBlocksToInstructions(content);
+
+/// Picks the connection a block runs on, in the order the editor implies:
+/// the block's own, the preset's, then whatever the LLM tab is on.
+///
+/// Either level may be left on "Use selected LLM connection" — an empty id,
+/// which the editor literally labels that way — so an empty id means "follow
+/// the selection", never "misconfigured". An id that no longer resolves (the
+/// preset was deleted) also falls through, so a stale reference degrades to
+/// the selected connection instead of an error card.
+@visibleForTesting
+ApiConfig? resolveBlockApiConfig({
+  required String blockApiConfigId,
+  required String presetApiConfigId,
+  required List<ApiConfig> allConfigs,
+  required ApiConfig? activeFallback,
+}) {
+  for (final id in [blockApiConfigId, presetApiConfigId]) {
+    if (id.isEmpty) continue;
+    final match = allConfigs.where((c) => c.id == id).firstOrNull;
+    if (match != null) return match;
+  }
+  return activeFallback;
+}
+
+class InfoBlockService {
+  InfoBlockService(this._ref, {BlockLlmRunner? llmRunner})
+    : _llmRunner = llmRunner ?? const BlockLlmRunner();
+
+  final Ref _ref;
+  final BlockLlmRunner _llmRunner;
+
+  /// Generates the text content for a single infoblock block.
+  /// Returns `(content, error)` — on success `error` is null; on failure
+  /// `content` is null and `error` describes what went wrong.
+  Future<({String? content, String? error})> generateSingleBlockContent({
+    required String sessionId,
+    required String messageId,
+    required List<ChatMessage> messages,
+    required BlockConfig blockConfig,
+    required Character? character,
+    required String? persona,
+    String? personaPrompt,
+    required String? previousOutput,
+    ExtensionContextPolicy contextPolicy = const ExtensionContextPolicy(),
+    MainModelContextSnapshot? mainModelContextSnapshot,
+    Persona? personaModel,
+    ExtensionPreset? preset,
+    int swipeId = 0,
+    CancelToken? cancelToken,
+    void Function(String partial)? onStreamUpdate,
+  }) async {
+    if (cancelToken?.isCancelled == true) return (content: null, error: null);
+
+    // Pull this block's own prior outputs (same name, earlier messages) so the
+    // model can continue/update the existing state instead of regenerating from
+    // scratch. Controlled per-block via [previousBlocksCount] (0 = disabled).
+    final previousBlocks = await _loadPreviousBlocks(
+      sessionId: sessionId,
+      currentMessageId: messageId,
+      currentSwipeId: swipeId,
+      messages: messages,
+      blockConfig: blockConfig,
+    );
+
+    // The template is the only thing that decides whether the reply is read
+    // out of tags. A block that carries none — an image agent, a JS agent, a
+    // block whose prompt already fixes the shape — has its whole reply stored,
+    // which is what the image and JS types used to get from a type check.
+    final resolvedTemplate = _resolveTemplate(blockConfig);
+    final systemContent = _buildSystemMessage(
+      blockConfig: blockConfig,
+      template: resolvedTemplate,
+      character: character,
+      persona: persona,
+    );
+    final supplementalContent = _buildSupplementalMessage(
+      blockConfig: blockConfig,
+      character: character,
+      persona: persona,
+      previousOutput: previousOutput,
+      previousBlocks: previousBlocks,
+    );
+    final canUseSnapshot = contextPolicy.useMainModelContext
+        ? mainModelContextSnapshot != null
+        : mainModelContextSnapshot?.filterablePromptMessages != null;
+    final needsReconstructedHistory =
+        contextPolicy.legacyPromptSemantics || !canUseSnapshot;
+    final contextMessages = needsReconstructedHistory
+        ? await _ref
+              .read(extBlocksPromptInjectionProvider)
+              .injectIntoHistory(sessionId: sessionId, messages: messages)
+        : messages;
+    final legacyContextMessages = contextPolicy.legacyPromptSemantics
+        ? buildContextMessages(
+            messages: contextMessages,
+            anchorMessageId: messageId,
+            count: blockConfig.contextMessageCount,
+          )
+        : const <ChatMessage>[];
+    final runtimePromptMessages =
+        contextPolicy.includeRuntimePrompts && needsReconstructedHistory
+        ? _ref
+              .read(runtimePromptInjectionProvider.notifier)
+              .bySession(sessionId)
+              .map((injection) => injection.toPromptMessage())
+              .toList()
+        : const <PromptMessage>[];
+    final assembly = const ExtensionContextAssembler().assemble(
+      policy: contextPolicy,
+      blockConfig: blockConfig,
+      chatMessages: contextMessages,
+      anchorMessageId: messageId,
+      character: character,
+      persona:
+          personaModel ??
+          (persona == null
+              ? null
+              : Persona(id: '', name: persona, prompt: personaPrompt)),
+      systemInstruction: systemContent,
+      supplementalInstruction: supplementalContent,
+      legacyUserContent: contextPolicy.legacyPromptSemantics
+          ? InfoBlockService.buildLegacyUserMessage(
+              blockConfig: blockConfig,
+              character: character,
+              persona: persona,
+              personaPrompt: personaModel?.prompt ?? personaPrompt,
+              contextMessages: legacyContextMessages,
+              previousOutput: previousOutput,
+              previousBlocks: previousBlocks,
+            )
+          : null,
+      runtimePromptMessages: runtimePromptMessages,
+      mainContextSnapshot: mainModelContextSnapshot,
+    );
+    if (assembly.reconstructed && contextPolicy.useMainModelContext) {
+      debugPrint(
+        '[InfoBlockService] main context snapshot unavailable; '
+        'using reconstructed context for "${blockConfig.name}"',
+      );
+    }
+
+    // Resolve the connection: the block's own, then the preset's, then the
+    // connection the LLM tab is on. Either level may be left on "Use selected
+    // LLM connection" (an empty id), which is the documented default — the
+    // editor labels the empty row exactly that way — so an empty id must mean
+    // "follow the selection", never "misconfigured".
+    final apiConfigs = await _ref.read(apiListProvider.future);
+    final apiConfig = _resolveApiConfig(
+      blockConfig: blockConfig,
+      preset: preset,
+      apiConfigs: apiConfigs,
+    );
+    if (apiConfig == null) {
+      debugPrint(
+        '[InfoBlockService] No API config for block "${blockConfig.name}"',
+      );
+      return (
+        content: null,
+        error: 'API config not set for block "${blockConfig.name}"',
+      );
+    }
+
+    if (cancelToken?.isCancelled == true) return (content: null, error: null);
+
+    final callId = 'extblock:${blockConfig.id}:$messageId#$swipeId';
+    String? rawResponse;
+    try {
+      rawResponse = await _callLLM(
+        apiConfig: apiConfig,
+        blockConfig: blockConfig,
+        model: blockConfig.model.isNotEmpty ? blockConfig.model : preset?.apiModel,
+        requestMessages: assembly.messages,
+        charName: character?.name,
+        userName: personaModel?.name ?? persona ?? 'User',
+        cancelToken: cancelToken,
+        onStreamUpdate: onStreamUpdate,
+        // Diagnostic label only — never serialized into the provider body.
+        // Without it an ext block request lands in the capture log unlabeled,
+        // unlike every other stage (chat, cleaner, ledger, summary). The
+        // `callId` / `pipelineRunId` pair is what the outcome row joins on:
+        // without them the model's reply is captured but never shown.
+        //
+        // `agentId` is what the inspector prints for the step (the way a Studio
+        // shard shows its readable agent id), so it carries the block's *name*,
+        // not its id: a UUID there told the reader nothing. Identity stays in
+        // `callId`, and the name is frozen at send time so history keeps
+        // reading right after the block is renamed or deleted.
+        captureContext: LlmCaptureContext(
+          stage: 'extblock.${blockConfig.type.name}',
+          sessionId: sessionId,
+          messageId: messageId,
+          pipelineRunId: 'extblock:$sessionId:$messageId#$swipeId',
+          callId: callId,
+          logicalCallId: callId,
+          agentId: blockConfig.name,
+          relatedArtifactId: messageId,
+          attempt: 1,
+        ),
+      );
+    } catch (e) {
+      if (cancelToken?.isCancelled == true) return (content: null, error: null);
+      return (content: null, error: formatError(e));
+    }
+
+    if (cancelToken?.isCancelled == true) return (content: null, error: null);
+
+    if (rawResponse == null || rawResponse.trim().isEmpty) {
+      return (content: null, error: 'LLM returned empty response');
+    }
+
+    final content = resolveBlockContent(
+      rawResponse: _withoutCodeFence(rawResponse),
+      blockConfig: blockConfig,
+      resolvedTemplate: resolvedTemplate,
+    );
+    if (content == null) {
+      return (
+        content: null,
+        error: resolvedTemplate.trim().isNotEmpty
+            ? 'LLM returned empty block (no text inside <${blockTagName(blockConfig, resolvedTemplate)}> tags)'
+            : 'LLM returned empty response',
+      );
+    }
+    return (content: content, error: null);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Context helpers
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /// Builds a [MacroContext] snapshot from the current block generation
+  /// arguments. Used to expand `{{char}}` / `{{user}}` / `{{description}}`
+  /// / `{{personality}}` / `{{scenario}}` in the LLM-bound prompt and in
+  /// the post-LLM content (via [MacroExpander.expand]).
+  MacroContext _macroContext({Character? character, String? persona}) {
+    return MacroContext(character: character, persona: persona);
+  }
+
+  /// Loads up to [BlockConfig.previousBlocksCount] of this block's own prior
+  /// outputs (same [BlockConfig.id], same session, from OTHER messages),
+  /// ordered oldest → newest for prompt insertion. Returns empty when the
+  /// feature is disabled (`previousBlocksCount <= 0`) or the block has no id.
+  Future<List<InfoBlock>> _loadPreviousBlocks({
+    required String sessionId,
+    required String currentMessageId,
+    required int currentSwipeId,
+    required List<ChatMessage> messages,
+    required BlockConfig blockConfig,
+  }) async {
+    final count = blockConfig.previousBlocksCount;
+    if (count <= 0 || blockConfig.id.isEmpty) {
+      return const [];
+    }
+
+    final anchorIndex = messages.indexWhere((m) => m.id == currentMessageId);
+    if (anchorIndex <= 0) return const [];
+    final previousMessages = messages
+        .take(anchorIndex)
+        .where((m) => !m.isHidden && !m.isTyping)
+        .toList();
+    final previousMessageIds = previousMessages.map((m) => m.id).toList();
+    if (previousMessageIds.isEmpty) return const [];
+    final messageOrder = {
+      for (var i = 0; i < previousMessageIds.length; i++)
+        previousMessageIds[i]: i,
+    };
+    final swipeByMessageId = {
+      for (final message in previousMessages) message.id: message.swipeId,
+    };
+
+    final repo = _ref.read(infoBlocksRepoProvider);
+    final blocks = await repo.getBySessionId(sessionId);
+
+    final filtered =
+        blocks
+            .where(
+              (b) =>
+                  b.blockId == blockConfig.id &&
+                  b.content.trim().isNotEmpty &&
+                  messageOrder.containsKey(b.messageId) &&
+                  b.swipeId == swipeByMessageId[b.messageId] &&
+                  !(b.messageId == currentMessageId &&
+                      b.swipeId == currentSwipeId),
+            )
+            .toList()
+          ..sort((a, b) {
+            final byMessage = messageOrder[a.messageId]!.compareTo(
+              messageOrder[b.messageId]!,
+            );
+            if (byMessage != 0) return byMessage;
+            final bySwipe = a.swipeId.compareTo(b.swipeId);
+            if (bySwipe != 0) return bySwipe;
+            return a.createdAt.compareTo(b.createdAt);
+          });
+
+    final latestPerMessage = <String, InfoBlock>{};
+    for (final block in filtered) {
+      latestPerMessage[block.messageId] = block;
+    }
+
+    return latestPerMessage.values
+        .toList()
+        .reversed
+        .take(count)
+        .toList()
+        .reversed
+        .toList();
+  }
+
+  /// Returns the template sent to the LLM. Empty [blockConfig.template] means
+  /// no XML wrapper — the full model reply is stored as-is.
+  String _resolveTemplate(BlockConfig blockConfig) {
+    final raw = blockConfig.template.trim();
+    if (raw.isEmpty) return '';
+    return raw.replaceAll('{{name}}', blockConfig.name);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Prompt building (system + user)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /// Builds the system message: shows the model the exact template layout it
+  /// must produce, plus optional user-defined prompt instructions.
+  /// Mirrors upstream `BlockService.getBlocksFullPrompt`.
+  String _buildSystemMessage({
+    required BlockConfig blockConfig,
+    required String template,
+    Character? character,
+    String? persona,
+  }) {
+    final instructions = expand(
+      blockConfig.prompt.trim(),
+      _macroContext(character: character, persona: persona),
+    );
+
+    // No template means the block's prompt is the whole instruction. An image
+    // agent's prompt is written that way — it fixes its own output shape — and
+    // prefixing it with a format rule it did not ask for is how a carefully
+    // built card prompt gets talked out of its own layout.
+    if (template.isEmpty) {
+      return instructions.isNotEmpty
+          ? instructions
+          : 'Write the block content directly. Do not wrap the answer in XML '
+                'tags unless asked.';
+    }
+
+    final buffer = StringBuffer()
+      ..writeln('Output format — fill in the content between these tags:')
+      ..writeln(template)
+      ..writeln();
+
+    if (instructions.isNotEmpty) {
+      buffer
+        ..writeln('Instructions:')
+        ..writeln(instructions)
+        ..writeln();
+    }
+    return buffer.toString().trimRight();
+  }
+
+  /// Unwraps a reply that is nothing but one fenced code block.
+  ///
+  /// Models fence HTML and JSON cards unprompted. The original extension
+  /// strips the fence from every generated block for the same reason, and the
+  /// interactive type did it here before the types merged; doing it once, for
+  /// all of them, is what makes that a property of the reply rather than of
+  /// the block's kind.
+  static String _withoutCodeFence(String raw) {
+    final trimmed = raw.trim();
+    if (!trimmed.startsWith('```') || !trimmed.endsWith('```')) return trimmed;
+    if (trimmed.length < 6) return trimmed;
+    final firstNewline = trimmed.indexOf('\n');
+    if (firstNewline < 0) return trimmed;
+    return trimmed.substring(firstNewline + 1, trimmed.length - 3).trim();
+  }
+
+  /// Builds the user message: the conversation context, character, persona,
+  /// and optional chained block output. The model is meant to fill in the
+  /// template based on this material.
+  String _buildSupplementalMessage({
+    required BlockConfig blockConfig,
+    required Character? character,
+    required String? persona,
+    required String? previousOutput,
+    List<InfoBlock> previousBlocks = const [],
+  }) {
+    final buffer = StringBuffer();
+
+    if (blockConfig.contextSystemPrompt.isNotEmpty) {
+      final sysPrompt = expand(
+        blockConfig.contextSystemPrompt,
+        _macroContext(character: character, persona: persona),
+      );
+      buffer.writeln(sysPrompt);
+      buffer.writeln();
+    }
+
+    if (previousBlocks.isNotEmpty) {
+      final label = blockConfig.name.trim().isEmpty
+          ? 'this block'
+          : '"${blockConfig.name}"';
+      buffer.writeln(
+        'Previous outputs of $label (oldest first). Continue and update the '
+        'latest state instead of starting over:',
+      );
+      for (var i = 0; i < previousBlocks.length; i++) {
+        buffer.writeln('--- #${i + 1} ---');
+        buffer.writeln(_withoutImagePaths(previousBlocks[i].content).trim());
+      }
+      buffer.writeln();
+    }
+
+    if (previousOutput != null && previousOutput.isNotEmpty) {
+      buffer.writeln('Output from previous block in chain:');
+      buffer.writeln(previousOutput);
+      buffer.writeln();
+    }
+
+    return buffer.toString().trimRight();
+  }
+
+  @visibleForTesting
+  static String buildLegacyUserMessage({
+    required BlockConfig blockConfig,
+    required Character? character,
+    required String? persona,
+    String? personaPrompt,
+    required List<ChatMessage> contextMessages,
+    required String? previousOutput,
+    List<InfoBlock> previousBlocks = const [],
+  }) {
+    final buffer = StringBuffer();
+
+    if (blockConfig.contextSystemPrompt.isNotEmpty) {
+      buffer
+        ..writeln(
+          expand(
+            blockConfig.contextSystemPrompt,
+            MacroContext(character: character, persona: persona),
+          ),
+        )
+        ..writeln();
+    }
+    if (previousBlocks.isNotEmpty) {
+      final label = blockConfig.name.trim().isEmpty
+          ? 'this block'
+          : '"${blockConfig.name}"';
+      buffer.writeln(
+        'Previous outputs of $label (oldest first). Continue and update the '
+        'latest state instead of starting over:',
+      );
+      for (var i = 0; i < previousBlocks.length; i++) {
+        buffer
+          ..writeln('--- #${i + 1} ---')
+          ..writeln(_withoutImagePaths(previousBlocks[i].content).trim());
+      }
+      buffer.writeln();
+    }
+    if (character != null) {
+      buffer.writeln('Character: ${character.name}');
+      if ((character.description ?? '').isNotEmpty) {
+        buffer.writeln('Description: ${character.description}');
+      }
+      buffer.writeln();
+    }
+    if (persona != null && persona.isNotEmpty) {
+      buffer.writeln('User Persona: $persona');
+      final profile = personaPrompt?.trim();
+      if (profile != null && profile.isNotEmpty) {
+        buffer
+          ..writeln('Persona profile:')
+          ..writeln(profile);
+      }
+      buffer.writeln();
+    }
+    if (contextMessages.isNotEmpty) {
+      buffer.writeln('Recent conversation:');
+      for (final message in contextMessages) {
+        final role = message.role == 'user' ? 'USER' : 'ASSISTANT';
+        buffer.writeln('$role: ${_withoutImagePaths(message.content)}');
+      }
+      buffer.writeln();
+    }
+    if (previousOutput != null && previousOutput.isNotEmpty) {
+      buffer
+        ..writeln('Output from previous block in chain:')
+        ..writeln(previousOutput)
+        ..writeln();
+    }
+    return buffer.toString().trimRight();
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // LLM call
+  // ─────────────────────────────────────────────────────────────────────────
+
+  ApiConfig? _resolveApiConfig({
+    required BlockConfig blockConfig,
+    required ExtensionPreset? preset,
+    required List<ApiConfig> apiConfigs,
+  }) => resolveBlockApiConfig(
+    blockApiConfigId: blockConfig.apiConfigId,
+    presetApiConfigId: preset?.apiConfigId ?? '',
+    allConfigs: apiConfigs,
+    activeFallback: _ref.read(activeApiConfigProvider),
+  );
+
+  Future<String?> _callLLM({
+    required ApiConfig apiConfig,
+    required BlockConfig blockConfig,
+    required String? model,
+    required List<Map<String, dynamic>> requestMessages,
+    required String? charName,
+    required String userName,
+    CancelToken? cancelToken,
+    void Function(String accumulated)? onStreamUpdate,
+    LlmCaptureContext? captureContext,
+  }) {
+    return _llmRunner.run(
+      apiConfig: apiConfig,
+      messages: requestMessages,
+      model: model,
+      // A block only streams when it streams into the panel; otherwise the
+      // whole answer is wanted in one piece.
+      stream: onStreamUpdate != null,
+      charName: charName,
+      userName: userName,
+      cancelToken: cancelToken,
+      onStreamUpdate: onStreamUpdate,
+      captureContext: captureContext,
+    );
+  }
+}

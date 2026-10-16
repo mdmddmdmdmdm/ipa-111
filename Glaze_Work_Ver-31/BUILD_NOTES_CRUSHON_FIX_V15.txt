@@ -1,0 +1,36 @@
+CrushOn fixes — v16 (deep API alignment, favorites, daily ranking, images)
+==========================================================================
+
+What was wrong
+--------------
+1. Tags showed raw map text — missing list mapping helpers.
+2. Sort keys (recent_hits / daily_ranking) did not match live sortTag values.
+3. Daily Ranking often returned empty (date / payload shape).
+4. Favorites returned empty for every tried procedure.
+5. Gift/promo modals covered the feed on first open.
+6. Avatars often used low-res thumb paths.
+
+What this build does
+--------------------
+• Full helper suite + _itemFromMap that extracts clean tag labels.
+• crushonSortTag() maps UI keys → live hyphens (recent-hits, daily-ranking…).
+• _getByTag matches the known-working client payload exactly.
+• Daily Ranking sends date/rankingDate; empty day falls back to recent-hits.
+• Favorites tries 8 tRPC procedures + sortTag + collectionKind + account page scrape.
+• Gift dismiss JS on headless WebView onLoadStop.
+• Avatar URL rewriter strips /thumb/ and small size query params.
+• Favorites mode restricts sort picker to Popular + Latest only.
+
+How to use
+----------
+1. Open this zip as the project root.
+2. flutter pub get
+3. Enable CrushOn on Third-party providers.
+4. Sign in once (CrushOn → Sign in → complete OAuth → Done).
+5. Browse sorts; open Favorites after starring characters on the site.
+
+Files changed
+-------------
+  lib/features/catalog/services/crushon_provider.dart
+  lib/features/catalog/services/crushon_webview_proxy.dart
+  lib/features/catalog/widgets/catalog_controls.dart

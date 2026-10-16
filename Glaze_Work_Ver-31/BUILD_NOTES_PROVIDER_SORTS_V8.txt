@@ -1,0 +1,66 @@
+Glaze provider sort / tag fixes - v8
+
+1. Chub Trending / Recent Hits (root cause of "trending is messed up")
+- Chub's site ranks Trending with sort=trending + max_days_ago, NOT
+  sort=download_count. The previous mapping used download_count for both
+  trending_week and trending_24h, so those lists were lifetime popularity
+  with a time filter that the server largely ignored for ranking.
+- trending_week  → sort=trending, max_days_ago=7
+- trending_24h   → sort=trending, max_days_ago=1
+- recent_hits    → sort=trending, max_days_ago=1  (new sort option matching
+  the site's "Recent Hits" feed; same API params as 24h trending)
+- popular stays download_count (lifetime)
+
+2. Chub Timeline
+- Still uses /api/timeline/v1 (account-personalized). No change to the
+  endpoint; the broken trending ranking was the main reason Timeline and
+  Trending looked wrong relative to each other on the site.
+
+3. Tag system redo (unfiltered, all providers)
+- Chub tags: harvest across more sort modes (including trending), always
+  request nsfw+nsfl, preserve original casing, raise cap to 800, skip pure
+  nsfw/sfw/nsfl flags as browsable topics.
+- Janitor top custom tags: fetch from both mode=all and mode=sfw so NSFW
+  slang is present in the filter sheet, not only the SFW half.
+- SpicyChat: Typesense facet_limit raised 250 → 500 for a fuller tag list.
+- All Providers: filter sheet now merges Janitor + Chub + SpicyChat +
+  DataCat tags into one case-insensitive vocabulary. Selecting "Female"
+  stores both the display name (for Chub/SpicyChat text filters) and the
+  Janitor numeric id when known (for Janitor/DataCat).
+- Tag toggle always records the name alongside any id so cross-provider
+  search stays consistent.
+
+4. UI
+- Chub sort menu includes "Recent Hits".
+- en.json / ru.json keys: catalog_sort_chub_recent_hits.
+
+Build note: Flutter/Dart/Xcode are not installed in this environment, so
+this archive is source-only and was not compiled into an iOS .app/.ipa here.
+
+5. Review fixes (post-v8 pass)
+- Tag toggle: single-provider still stores id XOR name so Janitor does not
+  AND curated tag_id[] with the same name as custom_tags[].
+- Combined mode still stores both; janitorSearch skips custom_tags entries
+  whose name already matches a selected curated id.
+- Filter badge count no longer double-counts id+name pairs.
+
+6. Follow-up fixes (Latest / tag Trending / All Providers)
+- Chub Latest now uses sort=created_at (site "Creation Time" / brand-new cards).
+  last_activity_at remains for Recently Updated only.
+- Chub tag + Trending: max_days_ago is omitted when topics are set, matching
+  the site's tag-scoped Trending (home feed still uses the 7d/1d windows).
+- Search also sends namespace=characters, asc=false, chub=true for parity with
+  the site's own requests.
+- All Providers combined merge never includes JannyAI (no shared engagement
+  metric). Picker shows a hint under "All Providers". Single-provider Janny
+  is unchanged.
+
+7. Follow-up (Newest merge / SpicyChat login / Chub tag sorts)
+- All Providers merge is round-robin by rank index so Newest #1 from each
+  source stays on top (alpha-tiebreak on equal percentiles had scrambled it).
+- SpicyChat login sheet clears cookies/storage and opens /login so the user
+  must sign in (no silent restore of the previous account).
+- Chub with tags: sort menu switches to tag-page vocabulary (Trending,
+  Popularity, AI Rating, Messages, Messages per Chat, Chats per User, …).
+  Home-only windowed trending keys auto-map to plain trending with no
+  max_days_ago under a topic filter.

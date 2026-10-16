@@ -1,0 +1,103 @@
+Glaze v25: Reddit hop, "404" description, Favorites Latest/Popular
+==================================================================
+
+Three reports, three root causes (each reproduced in a test before the fix).
+
+1. "It opened Reddit while I was scrolling"
+-------------------------------------------
+Cause: the hidden crushon.ai browser (site reader) clicks things on its own. When the
+Favorites flow looks for the profile's icon tabs it took ANY row of >=4 icon-only
+elements, and if the star tab was not confirmed it clicked every icon in the row
+one after another. On crushon.ai that row can be the sidebar/footer SOCIAL icons
+(Discord, Reddit, X, Telegram, Instagram). A synthetic click on a link is a real
+navigation, and on iOS a reddit.com link is handed to the Reddit app / Safari.
+Reproduced: with the old reader, openFavorites() clicked all five social links and
+opened five off-site windows.
+Fix, in layers:
+  * site_reader.js: external links are never clicked (realClick refuses them), a
+    capture-phase listener swallows any click that reaches one, window.open and
+    anchor.click() to off-site are neutralised. iconTabRow() ignores external /
+    footer / "social" icon rows; the star-tab search tries at most 6 tab-like
+    controls.
+  * crushon_site_reader.dart: the hidden browsers now use
+    useShouldOverrideUrlLoading + shouldOverrideUrlLoading (cancel any main-frame
+    navigation off crushon.ai / its image CDN / Cloudflare) and onCreateWindow=false,
+    supportMultipleWindows=false.
+  * crushon_login_sheet.dart: the sheet's shouldOverrideUrlLoading was a no-op (the
+    callback was not even enabled). It is now enabled and cancels Reddit / Telegram /
+    Instagram / TikTok / YouTube / discord.gg links; real sign-in hosts stay allowed.
+  * NOT changed: links inside a creator's description still open when YOU tap them.
+
+2. Description shows "404 Page Not Found"
+-----------------------------------------
+Cause: the reader opened /character/<id>, but the real page is
+/character/<id>/details (the link you pasted). The bare route is the site's own 404
+page, and captureInfo()'s last-resort "biggest block of text" fallback captured the
+404 artwork as the character's description. (The real description is plain text
+under an "Introduction" label; I checked the live page.)
+Fix:
+  * Dart: characterPage() accepts a bare id, /character/<id> or any pasted link
+    (crushonCharacterId), opens /character/<id>/details first (then /en/... and the
+    bare route), skips any address the page reports as not found.
+  * site_reader.js: isNotFoundDoc(); pageInfo().notFound; captureInfo() never accepts
+    a 404 page. New capture anchored on "Introduction": takes everything after that
+    label up to Comments / Public Memories / Supporters, drops the tag chips, keeps
+    the creator's own styling and pictures (a "Comments" title INSIDE their styled
+    text does not cut it short). If the live page has nothing, it reads the details
+    page's server HTML in-page (fetch + DOMParser), then the old tab-row panel.
+    img.cocdn.co/_image/optimize/<url> picture wrappers are unwrapped.
+  * crushon_description.dart / crushon_provider.dart: Dart-side guards drop a 404
+    page and the site's generic meta blurb ("An NSFW AI private space exclusive to
+    you...") from every description source.
+  * Characters you ALREADY imported with the 404 picture keep it; re-import them
+    (or clear the "Display description" field in the character editor).
+
+3. Favorites: Latest / Popular, profile -> star -> scroll
+---------------------------------------------------------
+Causes: (a) catalog_controls.dart hid the sort chip while CrushOn Favorites was on;
+(b) even the stored sort never reached the reader: favorites() took no sort.
+Fix:
+  * UI: the sort chip is shown in CrushOn Favorites with Latest / Popular. Any other
+    saved sort (Trending, Daily Ranking...) is displayed and fetched as Latest (the
+    site's default there).
+  * catalog_provider -> crushonFavoritesPage(sort, nsfw) -> reader.favorites(sortKey,
+    nsfw). The feed key includes sort + NSFW; changing only the sort reuses the open
+    star tab instead of reloading the profile.
+  * site_reader.js applyFavoritesSort(): drives the profile's own "Latest" dropdown.
+    It has its OWN vocabulary (Latest/Popular) and only looks BELOW the Characters /
+    World Cards / ... chips, because the profile header also prints "Following",
+    which the home-feed sort vocabulary would have clicked. "Popular" failing is an
+    error with the controls seen (never a wrong order under a Popular label).
+  * openProfileFavorites(): same-site profile-link fallback; after the Characters
+    chip it waits for the cards and scrolls the first one into view; NSFW follows
+    the site's "Unfiltered" switch like the home feed.
+  * Favorites addresses that are 404 pages are skipped.
+
+Tests
+-----
+tools/crushon_reader_test (Chromium via Playwright):
+  node bugs_test.js      26 pass  (NEW: Reddit/social row, favourites + Latest/Popular
+                                   incl. the "Following" trap, 404 page, real
+                                   description, server-HTML fallback)
+                         -> run against the OLD reader it fails on the Reddit checks
+  node run_tests.js      32 pass   node calendar_test.js   9 pass
+  node profile_test.js   pass      node info_test.js       pass
+  usage: bugs_test.js [path/to/site_reader.js]
+test/crushon_reader_helpers_test.dart (NEW, Dart; not run here).
+
+NOT verified (be aware)
+-----------------------
+* Dart was not compiled or run (no Flutter SDK here). Please run:
+    flutter pub get && flutter analyze && flutter test test/crushon_reader_helpers_test.dart
+  New APIs used: HeadlessInAppWebView(shouldOverrideUrlLoading, onCreateWindow),
+  InAppWebViewSettings(useShouldOverrideUrlLoading, supportMultipleWindows,
+  javaScriptCanOpenWindowsAutomatically), NavigationAction.isForMainFrame. If
+  analyze complains about one of these names on 6.2.0-beta.3, it is a one-line fix.
+* The signed-in profile page could not be opened from here; the profile mock is built
+  from your screenshots (icon tab row, Characters/World Cards/... chips, "Latest"
+  dropdown). The character page structure comes from the live page text.
+* If something is still off, the debug console prints lines tagged [CrushOn-reader]:
+    "blocked off-site navigation to <host>"   (Reddit guard fired; tells us the source)
+    "favorites sort popular -> {...}"          (what the dropdown did)
+    "captureInfo ok via live-intro|server-html|tab-panel" or "captureInfo: <reason>"
+  Send those lines and the matching rule is a small change in assets/crushon/site_reader.js.

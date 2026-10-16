@@ -1,0 +1,31 @@
+HOW TO APPLY THIS PATCH TO "Glaze - Work in Progress - Ver 14.zip"
+================================================================
+
+1. Extract (unzip) your original:
+     Glaze - Work in Progress - Ver 14.zip
+
+2. From THIS patch folder, copy/replace files into the extracted project
+   so the paths match exactly:
+
+   REPLACE:
+     lib/app.dart
+     pubspec.yaml
+
+   ADD (new folders/files):
+     lib/core/services/featured_personas.dart
+     lib/core/services/persona_seeder.dart
+     assets/personas/noah.jpg
+     assets/personas/skyler.jpg
+     assets/personas/alice.jpg
+     assets/personas/daisy.jpg
+     assets/personas/jamal.jpg
+     assets/personas/claire.jpg
+
+3. Re-zip the whole project folder if you want a single archive again,
+   or just open the project in your IDE and run it.
+
+What this does:
+  - Seeds 6 default personas (Noah, Skyler, Alice, Daisy, Jamal, Claire)
+    on first launch, each with the matching picture.
+  - Descriptions are your full originals (grammar cleaned only; Jamal expanded).
+  - Pictures live under assets/personas/ and are registered in pubspec.yaml.

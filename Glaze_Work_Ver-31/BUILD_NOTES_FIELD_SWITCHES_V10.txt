@@ -1,0 +1,50 @@
+Glaze character prompt-field switches - v10
+
+WHAT IT DOES
+Character editor -> new section "Sent to the model". One row per field:
+Description, Personality, Scenario, Dialogue Examples, System Prompt,
+Advanced Definition, Chat History Instruction. Each row has:
+- a status dot + line of text (green = Sending, red = on but not found in the
+  prompt, amber = on but the field is empty, grey = off)
+- an on/off switch
+
+Switch ON  = the field is sent every message. If the active preset has that
+             block off or missing, the app adds it (card order, ahead of the
+             chat history). If the preset already sends it (its block, or a
+             {{description}} / {{personality}} / {{scenario}} / {{mesExamples}}
+             macro in another block) it stays where the preset put it - never
+             doubled.
+Switch OFF = the field is never sent: its block is removed AND its macro
+             expands to nothing in the preset.
+Default for every existing character is ON.
+
+Turning a switch on (or off) immediately builds a real test prompt with the
+preset that chats with this character and shows a toast with the result.
+"Check what is being sent" re-runs it with your current unsaved text.
+The dot reads the built prompt itself, so it cannot say "Sending" when the
+model would not get it.
+
+STORAGE
+character.extensions["prompt_field_switches"] = {"scenario": false, ...}
+Only OFF fields are stored. No DB migration; survives V2 JSON/PNG export/import.
+
+FILES
+new   lib/core/llm/character_field_switches.dart
+new   lib/features/character_list/widgets/prompt_fields_panel.dart
+new   test/character_field_switches_test.dart
+edit  lib/core/llm/prompt_builder.dart            (macros blanked when off; apply switches)
+edit  lib/core/llm/character_prompt_extras.dart   (off fields resolve to empty)
+edit  lib/core/llm/fallback_prompt_builder.dart   (no-preset path honours switches)
+edit  lib/shared/widgets/generic_editor.dart      (new 'custom' field type)
+edit  lib/features/character_list/character_editor_screen.dart
+
+KNOWN LIMITS
+- Not compiled or run: Flutter/Dart are not installed here. Delimiter checks
+  passed. Run `flutter analyze` and `flutter test
+  test/character_field_switches_test.dart`.
+- The indicator is not live-updating while you type; it refreshes on toggle and
+  on "Check what is being sent".
+- The test prompt uses the preset resolved for the character (character
+  binding, then global active preset, then first preset), not a specific chat's
+  chat-level binding.
+- Studio's own prompt path was not changed.

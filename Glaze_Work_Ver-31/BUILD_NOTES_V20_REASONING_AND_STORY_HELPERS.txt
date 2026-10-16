@@ -1,0 +1,35 @@
+Glaze v20: reply stuck in Reasoning + new story prompt helpers
+==============================================================
+Not compiled (no Flutter SDK here). Run: flutter analyze && flutter test
+New tests: test/reasoning_salvage_test.dart, test/prompt_helpers_test.dart (group added)
+
+1. Reply ends up inside "Reasoning", message empty
+   Cause: when the model/provider puts the whole answer in the reasoning channel
+   (reasoning_content, or an unclosed/odd <think> block), the app saved an empty
+   message and marked it "all reasoning".
+   Fix: lib/core/llm/reasoning_salvage.dart, called in stream_generation_service.dart
+   right before the message is saved, only when the visible reply is EMPTY:
+     a) text after a closing </think>-style tag becomes the reply;
+     b) text after a "Final response:" / "Reply:" label becomes the reply;
+     c) if the whole reasoning reads like roleplay (has *actions* or "dialogue",
+        no "The user wants / I should" style analysis) it becomes the reply.
+   Real thinking is left alone (an empty reply you can regenerate beats showing
+   analysis as the story). Your screenshot's reasoning is plain third-person
+   analysis without quotes/actions, so it would NOT be moved automatically; if
+   that happens often with a model, the usual causes are: the reply hit the max
+   response length while the model was still thinking (raise Max Response
+   tokens), or the model needs the reasoning effort lowered/turned off.
+
+2. New Prompt Helpers (API settings > Prompt Helpers and chat Tools; global)
+   - Stay In Character: no talking about instructions, the character sheet or
+     rules ("she always has an attitude", "is allowed to ..."), no author notes
+     or OOC unless you write (OOC) first.
+   - Stay On Story: every line must follow from the scene and your last message;
+     no random filler events/objects/tangents, no repeated lines.
+   - Limited Knowledge: characters only know what they saw/heard/were told in
+     the chat, so they cannot instantly know unshared things about you.
+   Sent with the other helpers as the last system block. Strings added to
+   en.json and ru.json. Existing saved helper choices keep working.
+
+Limits: prompt helpers reduce these problems but cannot guarantee them; they
+work best with a model that follows system instructions well.

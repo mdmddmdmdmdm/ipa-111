@@ -1,0 +1,349 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../../core/models/chat_message.dart';
+import '../../../core/models/preset.dart';
+import '../../../core/state/active_regex_provider.dart';
+import '../../../core/state/active_selection_provider.dart';
+import '../../../core/state/character_provider.dart';
+import '../../../core/state/persona_resolution.dart';
+import '../../personas/persona_list_provider.dart';
+import '../bridge/chat_bridge_controller.dart';
+import '../bridge/chat_overlay_blur_region.dart';
+import '../chat_provider.dart';
+import '../state/context_window_marker.dart';
+import '../state/generation_phase_provider.dart';
+
+/// Snapshot of the [ChatWebViewWidget] fields needed by
+/// [ChatWebViewInitializer]. Pure data — no `BuildContext` or
+/// `WidgetRef` references — so the initializer can be unit-tested
+/// without a widget tree.
+class ChatWebViewInitInput {
+  const ChatWebViewInitInput({
+    required this.charId,
+    required this.sessionId,
+    required this.charName,
+    required this.charColor,
+    required this.personaName,
+    required this.chatLayout,
+    required this.charAvatarPath,
+    required this.personaAvatarPath,
+    required this.greetingTotal,
+    required this.bgImagePath,
+    required this.bgBlur,
+    required this.bgNoiseOpacity,
+    required this.bgNoiseIntensity,
+    required this.chatFontName,
+    required this.chatFontDataUrl,
+    required this.chatFontSize,
+    required this.chatLetterSpacing,
+    required this.batterySaver,
+    required this.hideMessageId,
+    required this.hideGenerationTime,
+    required this.hideTokenCount,
+    required this.disableSwipeRegeneration,
+    required this.studioEnabled,
+    required this.messages,
+    required this.visibleStartIndex,
+    required this.memoryEntries,
+    required this.memoryDrafts,
+    required this.bottomInset,
+    this.viewportHeight = 0,
+    required this.topInset,
+    this.blurRegions = const [],
+    required this.searchQuery,
+    required this.searchCurrentIndex,
+    required this.isSelectionMode,
+    required this.isGenerating,
+    required this.isGeneratingImage,
+    this.isPostGenRunning = false,
+    this.isSendPending = false,
+  });
+
+  final String charId;
+  final String? sessionId;
+  final String? charName;
+  final String? charColor;
+  final String? personaName;
+  final String? chatLayout;
+  final String? charAvatarPath;
+  final String? personaAvatarPath;
+  final int greetingTotal;
+  final String? bgImagePath;
+  final double bgBlur;
+  final double bgNoiseOpacity;
+  final double bgNoiseIntensity;
+  final String? chatFontName;
+  final String? chatFontDataUrl;
+  final double chatFontSize;
+  final double chatLetterSpacing;
+  final bool batterySaver;
+  final bool hideMessageId;
+  final bool hideGenerationTime;
+  final bool hideTokenCount;
+  final bool disableSwipeRegeneration;
+  final bool studioEnabled;
+  final List<ChatMessage> messages;
+  final int visibleStartIndex;
+  final List<dynamic> memoryEntries;
+  final List<dynamic> memoryDrafts;
+  final double bottomInset;
+
+  /// Height of the WebView box, so the page can tell how much of
+  /// [bottomInset] its own viewport already absorbed.
+  final double viewportHeight;
+  final double topInset;
+  final List<ChatOverlayBlurRegion> blurRegions;
+  final String? searchQuery;
+  final int searchCurrentIndex;
+  final bool isSelectionMode;
+  final bool isGenerating;
+  final bool isGeneratingImage;
+
+  /// Mirrors [ChatState.isSendPending]; see [ChatBridgeController.isSendPending].
+  final bool isSendPending;
+  final bool isPostGenRunning;
+}
+
+/// One-time bridge initialisation sequence: regex context → identity →
+/// theme → background noise → chat font → message settings → second
+/// identity pass → messages → memory book → insets → overlays → search
+/// → selection mode → scroll to bottom → initial `isGenerating` flag
+/// → ext-block panel sync.
+///
+/// Extracted from `chat_webview_widget._initWebView` so the widget
+/// only calls [run] and a small `onReady` callback. The sequence is
+/// the same as before (a `setIdentity` is called twice on purpose —
+/// once before and once after the theme and assets load — to
+/// account for persona/character resolution that may have raced
+/// with the first identity call).
+class ChatWebViewInitializer {
+  ChatWebViewInitializer({
+    required this.ref,
+    required this.bridge,
+    required this.input,
+    required this.onReady,
+    required this.onSyncExtBlockPanels,
+    required this.applyTheme,
+  });
+
+  final WidgetRef ref;
+  final ChatBridgeController bridge;
+  final ChatWebViewInitInput input;
+  final VoidCallback onReady;
+  final Future<void> Function() onSyncExtBlockPanels;
+  final Future<void> Function() applyTheme;
+
+  /// The display-regex list the first paint was mapped with, captured right
+  /// before [run]'s `setMessages`. The widget reads it afterwards to tell a
+  /// list that changed *after* the paint (the DOM is stale, re-render) from
+  /// the list's own first load (the paint carries it, re-rendering again is a
+  /// duplicate first render). Null until that point is reached.
+  List<PresetRegex>? paintedDisplayRegexes;
+
+  /// Run the full init sequence. [onReady] is called synchronously
+  /// after the last `await` completes, before the ext-block sync.
+  Future<void> run() async {
+    final character = ref.read(characterByIdProvider(input.charId));
+    final effectivePersona = ref.read(
+      effectivePersonaForChatProvider((
+        charId: input.charId,
+        sessionId: input.sessionId,
+      )),
+    );
+    // Before the first setMessages: user messages resolve their stored
+    // `personaId` against this roster, and one that arrives late would render
+    // the whole chat with letter avatars first.
+    bridge.setPersonaRoster(ref.read(personaListProvider).value ?? const []);
+    bridge.setRegexContext(
+      await _displayRegexes(),
+      character,
+      effectivePersona,
+      sessionVars:
+          ref.read(chatProvider(input.charId)).value?.session?.sessionVars ??
+          const {},
+      globalVars: ref.read(globalVarsProvider),
+    );
+
+    await _setIdentity();
+    await applyTheme();
+    await bridge.setBackgroundImage(input.bgImagePath, input.bgBlur.toInt());
+    await bridge.setBackgroundNoise(
+      input.bgNoiseOpacity,
+      input.bgNoiseIntensity,
+    );
+    await bridge.setChatFont(
+      fontName: input.chatFontName,
+      fontDataUrl: input.chatFontDataUrl,
+      fontSize: input.chatFontSize,
+      letterSpacing: input.chatLetterSpacing,
+    );
+    await bridge.setMessageSettings(
+      batterySaver: input.batterySaver,
+      hideMessageId: input.hideMessageId,
+      hideGenerationTime: input.hideGenerationTime,
+      hideTokenCount: input.hideTokenCount,
+      disableSwipeRegeneration: input.disableSwipeRegeneration,
+      studioEnabled: input.studioEnabled,
+    );
+    // Persona/char identity can resolve while theme and assets load above.
+    await _setIdentity();
+    // Set bridge state before mapping messages below. The mapper carries the
+    // stream and post-gen flags independently to every message control.
+    bridge.isGenerating = input.isGenerating;
+    bridge.isPostGenRunning = input.isPostGenRunning;
+    bridge.isGeneratingImage = input.isGeneratingImage;
+    bridge.isSendPending = input.isSendPending;
+    // Origin ("Created on" / "Branched on") marker for the first paint.
+    bridge.chatOrigin = ChatBridgeController.originMarkerFor(
+      ref.read(chatProvider(input.charId)).value?.session,
+    );
+    // The WebView is kept alive across chats, so the renderer still holds the
+    // previous chat's search query and would re-highlight every message it
+    // renders below. Push this chat's search state (usually empty) *before*
+    // the first paint; the second push after setMessages re-runs the scroll to
+    // the active match once the sections exist.
+    await bridge.setSearch(
+      query: input.searchQuery ?? '',
+      activeIndex: (input.searchQuery?.isNotEmpty ?? false)
+          ? input.searchCurrentIndex
+          : -1,
+      // Numbering only: there is nothing to scroll to yet, and the highlights
+      // still in the page belong to the chat being replaced — revealing one of
+      // those would jump to a match in a message this chat does not have.
+      scroll: false,
+    );
+    // Memory membership is mapper input, not a post-render decoration. Seed it
+    // before mapping so the first layout already includes MEM/PENDING/DRAFT
+    // badges (whose height can otherwise invalidate the opening bottom jump).
+    await bridge.updateMemoryBookData(
+      entries: input.memoryEntries
+          .map((e) => {'status': e.status, 'messageIds': e.messageIds})
+          .toList(),
+      pendingDrafts: input.memoryDrafts
+          .map((e) => {'messageIds': e.messageIds})
+          .toList(),
+      patchMessages: false,
+    );
+    // The WebView is kept alive across chats, so the renderer still holds the
+    // previous chat's context boundary and would draw its rule on whichever
+    // message happens to share that id. Push this chat's boundary — usually
+    // null — before the first paint, the same reason the search state above is
+    // pushed early.
+    await bridge.setContextWindowStart(
+      ref.read(contextWindowStartProvider(input.charId)),
+    );
+    // Seed the phase before rendering an active typing node. The renderer uses
+    // this value while constructing the node, not only on later transitions.
+    await bridge.setGenerationPhase(
+      generationPhaseLabel(ref.read(generationPhaseProvider(input.charId))),
+    );
+    // Before the first paint, and before the retire below can read them: the
+    // page starts the elapsed clock off these two, and a chat reopened mid-run
+    // should find it already running rather than a bubble with no clock until
+    // the next dispatch. `setSendPending` also has to be mirrored into
+    // `isSendPendingInPage`, which is what the dispatcher level-reconciles
+    // against — left at its default it would push the same value again.
+    bridge.isSendPendingInPage = input.isSendPending;
+    await bridge.evalJs(
+      'if (window.bridge) { '
+      'window.bridge.setGenerating(${input.isGenerating}); '
+      // Guarded and last: a page from before this flag existed (a cached
+      // asset, the legacy bridge snapshot) would throw here.
+      'if (window.bridge.setSendPending) '
+      'window.bridge.setSendPending(${input.isSendPending}); '
+      '}',
+    );
+    // The page is kept alive across chats, so it may still hold the typing
+    // bubble of a run that finished while this chat was closed — nothing
+    // dispatched that run's falling edge, because the widget that would have
+    // was disposed. `setMessages` carries a bubble across on purpose, so left
+    // here it reopens the chat with a reply on its way that landed minutes
+    // ago, and no later re-render of the same session takes it back down.
+    // Retire it unless a run really is in flight; the page ignores the call
+    // when it has already stopped believing in the bubble itself.
+    if (!input.isGenerating && !input.isSendPending) {
+      await bridge.retireTypingPlaceholder();
+    }
+    // Captured before the maps are built so it is exactly the list the batch
+    // was rewritten with; the widget compares it against the provider once the
+    // bridge is ready.
+    paintedDisplayRegexes = bridge.displayRegexes;
+    await bridge.setMessages(
+      input.messages,
+      visibleStartIndex: input.visibleStartIndex,
+    );
+    if (input.bottomInset > 0) {
+      await bridge.setBottomPadding(
+        input.bottomInset,
+        viewportHeight: input.viewportHeight,
+      );
+    }
+    if (input.topInset > 0) {
+      await bridge.setTopPadding(input.topInset);
+    }
+    if (input.blurRegions.isNotEmpty) {
+      await bridge.setOverlayBlurRegions(input.blurRegions);
+    }
+    await bridge.setSelectionMode(input.isSelectionMode);
+    await bridge.scrollToBottom();
+    // After the opening jump to the bottom, not before it: revealing the active
+    // match is a scroll of its own, and the two land in the order they are
+    // issued. Opening a chat whose search is still open should leave the reader
+    // on the match, not at the end of the chat.
+    if (input.searchQuery != null && input.searchQuery!.isNotEmpty) {
+      await bridge.setSearch(
+        query: input.searchQuery!,
+        activeIndex: input.searchCurrentIndex,
+      );
+    }
+    // The two flags that decorate already-painted nodes, so they run after the
+    // paint. The run flags are pushed before `setMessages` above instead.
+    unawaited(
+      bridge.evalJs(
+        'if (window.bridge) { '
+        'window.bridge.setPostGenRunning(${input.isPostGenRunning}); '
+        'window.bridge.setImageGenerating(${input.isGeneratingImage}); '
+        '}',
+      ),
+    );
+    onReady();
+
+    // Push initial ext-block panels on first load.
+    unawaited(onSyncExtBlockPanels());
+  }
+
+  /// The display scripts the first paint has to carry.
+  ///
+  /// Awaited, not read. `displayRegexesProvider` loads the active preset from
+  /// the database and the global scripts from SharedPreferences, and on the
+  /// first open of a chat after launch neither has resolved yet — so reading
+  /// `.value` handed this sequence an empty list, `setMessages` below baked the
+  /// un-rewritten text into every message, and nothing re-rendered it. That is
+  /// the whole of "Alter Display scripts do not work on the first chat open":
+  /// the list arrived a few hundred milliseconds after the only moment anyone
+  /// asked for it.
+  Future<List<PresetRegex>> _displayRegexes() async {
+    try {
+      return await ref.read(displayRegexesProvider.future);
+    } catch (e) {
+      // A script list that cannot load must not stop the chat from opening.
+      debugPrint('[ChatWebView] display regexes failed to load: $e');
+      return const [];
+    }
+  }
+
+  Future<void> _setIdentity() {
+    return bridge.setIdentity(
+      charName: input.charName,
+      charColor: input.charColor,
+      personaName: input.personaName,
+      layout: input.chatLayout,
+      charAvatarPath: input.charAvatarPath,
+      personaAvatarPath: input.personaAvatarPath,
+      greetingTotal: input.greetingTotal,
+    );
+  }
+}

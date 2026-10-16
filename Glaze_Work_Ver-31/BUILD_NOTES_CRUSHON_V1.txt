@@ -1,0 +1,62 @@
+CrushOn.AI catalog provider — v1 foundation
+
+What this drop adds
+-------------------
+A full third-party content provider for https://crushon.ai, wired the same way
+as SpicyChat / Chub / Janitor:
+
+  • Browse sorts matching the live site dropdown:
+      Popular, Recent Hits, Trending, New, Daily Ranking,
+      Editor's Choice, Following
+  • Tag vocabulary (seeded from the site chips + live getSearchFilterTags)
+  • Search (character.searchInfinite)
+  • Daily Ranking date via CatalogFilters.window = "YYYY-MM-DD"
+  • Favorites (account-scoped, needs sign-in)
+  • Character import (best-effort; full definition needs session)
+  • WebView sign-in sheet that captures CF clearance + auth cookies
+  • Enum / catalog / favorites / sort-menu wiring
+
+New source files
+----------------
+  lib/features/catalog/services/crushon_provider.dart
+  lib/features/catalog/services/crushon_session.dart
+  lib/features/catalog/crushon_account_provider.dart
+  lib/features/catalog/widgets/crushon_login_sheet.dart
+
+Patched copies (merge these or apply WIRING.md by hand)
+-------------------------------------------------------
+  patches/catalog_models.dart
+  patches/third_party_providers_provider.dart
+  patches/catalog_provider.dart
+  patches/catalog_controls.dart
+  patches/unified_favorites_service.dart
+  patches/provider_logo.dart
+
+API notes
+---------
+CrushOn is Next.js + tRPC behind Cloudflare.
+  GET  /api/trpc/character.getCharactersByTag   (sortTag=…)
+  POST /api/trpc/character.searchInfinite
+  GET  /api/trpc/character.getSearchFilterTags
+  GET  /api/trpc/character.getFavoriteCharacters (auth)
+
+Bare HTTP is challenged by CF. The login sheet must be opened once so
+CrushOnWebSession can store cf_clearance + cookies; public sorts then work.
+
+Following + favorites require a real signed-in session.
+
+GIF / avatar URLs are passed through as CDN links; existing Image widgets
+already render gif/webp.
+
+Not in this drop (next iterations)
+----------------------------------
+  • Date-picker UI chip for Daily Ranking (data path is ready: set window)
+  • Providers-screen account row polish / auto-login restore
+  • Full character-card field mapping once a stable detail endpoint is confirmed
+  • Continuous background refresh / local mirror of rankings
+  • Bundled crushon.png logo asset
+
+Default: CrushOn is in the DISABLED set (opt-in). Enable it on the
+Third-Party providers screen.
+
+Build note: Flutter/Dart are not installed in this environment. Source-only.

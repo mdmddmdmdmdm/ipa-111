@@ -1,0 +1,31 @@
+Glaze v30: reasoning fixes (from Ver 29). NOT compiled - run flutter analyze && flutter test.
+New tests: test/stream_accumulator_orphan_close_test.dart, test/think_first_effort_and_refusal_test.dart
+
+1. "<model> does not support thinking" (HTTP 400) on a model that does reason (e.g. Mag-Mell-Reasoner):
+   Ollama refuses native reasoning for models whose registry entry lacks the thinking capability, even
+   when they write <think> text themselves. Now the first refusal is retried once WITHOUT native
+   reasoning and remembered per endpoint+model (NativeReasoningSupport, in
+   transport/native_reasoning_support.dart, used by PostProcessingChatTransport). Later requests skip
+   the native request, and Think First counts that model as having no native reasoning, so it applies
+   if you have it switched on. Remembered until the app restarts; if you turn "Request Native
+   Reasoning" off for that preset the error never happens.
+2. Reasoning panel missing / reasoning shown in the reply: reasoning models whose chat template already
+   opens the thinking block stream reasoning then "</think>" with no opening tag. The accumulator
+   showed all of it as the reply. A closing tag with no opening tag now moves everything before it
+   into the Reasoning panel (stream_accumulator.dart). While streaming, the text shows in the reply
+   until the closing tag arrives, then moves.
+3. Think First depth now follows Reasoning Effort clearly: min <30 words (one or two sentences), low
+   ~50, medium/auto ~120-180, high ~250-350 in four steps, max ~600-900 in six steps (recap, every
+   character, continuity audit, three candidate beats, choose, check against the rules).
+   Think First also adds output-token room (min +100, low +200, medium +450, high +800, max +1800) on
+   top of Max Response Tokens, because the thinking uses the same limit as the reply; without it a long
+   thought left the reply cut off. Only added while Think First is active and the cap is not 0.
+   Models still decide how long they think; the prompt is a request, not a guarantee.
+
+v31 correction: removed the rule that sent reasoning_effort = "none" to Ollama whenever "Request Native
+Reasoning" was off (added in Ver 16). It stopped models that reason on their own from reasoning at all.
+Now, with native reasoning off and Think First off, nothing about reasoning is sent: a model that
+reasons by itself keeps doing so. Reasoning arriving in Ollama's reasoning channel is shown when "Show
+Native Reasoning" is on; reasoning written as <think>...</think> in the reply is always parsed into the
+Reasoning panel (a closing tag alone is enough). To stop a model thinking, add
+reasoning_effort = none under Extra Request Parameters.

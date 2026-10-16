@@ -1,0 +1,35 @@
+CrushOn deep fix — v17
+======================
+Root cause: CrushOn never changes the URL when sorting — all discovery is
+client-side tRPC. Previous builds had wrong empty-sort fallbacks (turning
+"New" into Recent Hits), no reliable favorites path, clipped Daily Ranking
+date chip, and aggressive image crop.
+
+Fixes
+-----
+1. Sorting
+   - Removed the "empty → fall back to recent-hits" path that made New look
+     like Popular.
+   - Tries real aliases for new / editor-choice / daily-ranking when the
+     primary sortTag returns empty.
+   - Payload matches the live getCharactersByTag client.
+
+2. Favorites (hybrid system)
+   - Local SharedPreferences store of starred CrushOn characters (always works).
+   - Remote: 8 tRPC procedures + sortTag + collectionKind + account page scrape.
+   - Remote hits are persisted into the local store for next open.
+   - Favorites mode no longer hard-requires login when local stars exist.
+   - Sort menu in favorites mode still limited to Popular + Latest.
+
+3. Daily Ranking date chip
+   - Controls row is horizontally scrollable so the chip is never clipped.
+   - Date picker limited to last 60 days (no future / ancient dates).
+
+4. Image framing
+   - CrushOn cards use 3:4 aspect + Alignment.topCenter so full-art images
+     are less face-cropped than pure 2:3 center cover.
+
+5. Gift dismiss JS (retained from v15/16).
+
+Use this zip as the project root, flutter pub get, enable CrushOn, sign in
+once, star characters on the site or after a successful remote fetch.

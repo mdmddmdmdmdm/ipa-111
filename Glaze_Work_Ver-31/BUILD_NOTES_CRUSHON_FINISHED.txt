@@ -1,0 +1,48 @@
+CrushOn integration — Finished package (V2 + audit fixes)
+========================================================
+
+Checklist verified in source:
+
+[x] Sign-in
+    - CrushOnLoginSheet WebView harvests cookies into CrushOnWebSession
+    - crushOnAccountProvider marks connected + saves display name
+    - Third-party providers screen: account row, sign-out, NSFW toggle
+    - Saved accounts restore re-seeds cookies
+
+[x] Favorites (when signed in)
+    - CatalogState.supportsFavorites includes crushon → Favorites chip
+    - _fetchFavorites routes to crushonFetchFavorites
+    - Unified All-Providers favorites include CrushOn
+    - Multi-endpoint fallbacks: sortTag favorites/liked, getFavoriteCharacters,
+      queryFavoriteCharacters, collectionKind=favorites
+
+[x] Tags
+    - fetchCrushonTags live + seed vocabulary
+    - CatalogFilterSheet loads CrushOn tags + unified merge
+
+[x] Sort by (matches site)
+    - popular | recent_hits | trending | new | daily_ranking |
+      editor_choice | following
+    - Icons for each CrushOn key
+
+[x] Daily Ranking + date
+    - Date chip when sort=daily_ranking
+    - setSort seeds today; setWindow stores YYYY-MM-DD
+    - API sends date/rankingDate
+
+[x] Characters / use
+    - Multi tRPC + page scrape + search fallback
+    - Full CharacterData field mapping
+
+[x] GIFs
+    - Avatar URLs passed through (gif/webp)
+    - CrushOn Referer header on CachedNetworkImage
+    - Zero fade so frames are not discarded
+
+[x] Live / continuous access
+    - Every browse/search hits live tRPC (no local snapshot)
+    - Session ensureLoaded before requests
+    - CF clearance cookies attached when present
+
+Apply: open this zip as the project root, flutter pub get, enable CrushOn,
+open account once for CF, then browse.

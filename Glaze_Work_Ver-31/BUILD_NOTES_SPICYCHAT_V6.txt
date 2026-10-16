@@ -1,0 +1,26 @@
+Glaze SpicyChat / Chub fixes - v6
+
+1. SpicyChat tag source fixed
+- The filter sheet no longer reuses JanitorAI's tag catalog for SpicyChat.
+- SpicyChat tags are loaded from the live Typesense `tags` facet used by the public catalog.
+- Exact source spelling is preserved (for example Non-Human, FemalePOV, MalePOV).
+- Search filters canonicalize older saved aliases to the live SpicyChat spelling.
+- Active-filter chips also use the SpicyChat tag cache.
+
+2. Female vs FemalePOV fixed
+- Selecting Female now requires the character to actually have the Female tag.
+- A FemalePOV-only character is excluded.
+- A character carrying both Female and FemalePOV is still a valid Female result.
+
+3. SpicyChat For You / Recent resilience
+- Authenticated recommendation/history scraping accepts both /chatbot/ and /character/ card links and more card text/image layouts.
+- The previous page-level double-skip was removed.
+- If SpicyChat's recommendation page temporarily returns no scrapeable cards, For You falls back to the same public catalog using the current discovery filters instead of displaying a misleading zero-result page.
+
+4. Chub login stability
+- Chub login no longer forces the synthetic JanitorAI browser user-agent; native WebView UA is retained for Google OAuth compatibility.
+- Shared cookies are enabled for the auth WebView.
+- A captured URQL token is validated against Chub's account API before the panel closes, so partial OAuth/signup tokens do not count as a completed login.
+- Existing Back/X controls remain in place.
+
+Build note: Flutter/Dart/Xcode are not installed in this environment, so this archive is source-only and was not compiled into an iOS .app/.ipa here.

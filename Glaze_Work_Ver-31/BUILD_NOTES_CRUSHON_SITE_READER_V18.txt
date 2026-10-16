@@ -1,0 +1,84 @@
+CrushOn v18 — "Site Reader" rewrite
+===================================
+
+Why every earlier build kept failing
+------------------------------------
+CrushOn is a Next.js single-page app. Picking a sort never changes the URL and
+the list is an infinite scroll (no page 1/2/3). Builds v1–v17 tried to call the
+site's private tRPC API with guessed procedure names/payloads. Those guesses
+could not be verified, so sorting, "New", Daily Ranking and favorites silently
+returned wrong or empty lists.
+
+What v18 does instead (your idea, implemented)
+----------------------------------------------
+lib/features/catalog/services/crushon_site_reader.dart
+assets/crushon/site_reader.js
+
+A hidden browser opens the REAL crushon.ai and the reader:
+  * clicks the site's own sort dropdown (Popular / Recent Hits / Trending /
+    New / Daily Ranking / Editor's Choice / Following),
+  * scrolls the site's own infinite list for as long as needed (also handles
+    lists that recycle DOM rows by scrolling in small overlapping steps),
+  * reports cards in exactly the order the site shows them,
+  * records the JSON the site itself fetched, to add tags / counts / art.
+Because it is the site's own list, "Latest" etc. cannot differ from the site.
+Page 2, 3, 4… in Glaze simply means "keep scrolling the real list further".
+A newer request cancels an older one, so fast sort-switching can't mix lists.
+
+Fixes for each thing you reported
+---------------------------------
+1. Daily Ranking date off-screen / unscrollable
+   The top bar used a Spacer inside a horizontal scroll view (unbounded width),
+   which pushed the right-hand chips out of reach. Now two groups with
+   spaceBetween: they sit at the edges when they fit, and the bar scrolls when
+   it doesn't. (catalog_controls.dart)
+2. Date that doesn't exist on the site
+   The app no longer invents "today". Daily Ranking opens on the day the site
+   opens on; the chip shows the date the SITE displays, the picker is limited to
+   the range the site reports, and the chip is hidden if the site has no date
+   control. (catalog_provider.dart setSort, catalog_controls.dart)
+3. Sorting not matching the site
+   See "Site Reader" above.
+4. Favorites
+   Read from the site's own Favorites section of your account (account page ->
+   Favorites tab/section, with fallbacks), using your signed-in session. The
+   old "local favorites" store was removed: nothing ever added to it.
+   If the Favorites section can't be found, the error lists the controls it saw.
+5. Image crop "too zoomed"
+   The reader measures the aspect ratio, object-fit and focal point of the
+   site's own card images; cards use exactly that. Image URLs are no longer
+   rewritten (the old /thumb/ stripping produced bad links); next/image
+   wrapper URLs are unwrapped to the original art.
+6. Source badge now says "CrushOn" instead of "crushon".
+
+Other behaviour
+---------------
+* NSFW: the reader flips the site's own "Unfiltered" switch when it can, and
+  the app also drops NSFW-flagged cards when NSFW is off (default).
+* Tags: the reader tries the site's tag chips; cards are also filtered locally
+  by their tags.
+* Search: types into the site's own search page.
+* Character import: opens the character page and reads what it loaded.
+* The three hidden browsers (feed / search+favorites / detail) are created on
+  demand and disposed after 8 minutes idle.
+
+Tested
+------
+tools/crushon_reader_test/ runs the in-page reader in Chromium against a mock
+site with several awkward front-ends (32 checks, all passing): dropdown that
+only opens on pointerdown, click-only dropdown, native <select>, lazy images,
+next/image URLs, overlays, a virtualized list in a custom scroller, a custom
+calendar with disabled days, cards with no links, favorites tab, search.
+  cd tools/crushon_reader_test
+  NODE_PATH=<global node_modules> node run_tests.js
+
+NOT tested: the Dart half (no Flutter SDK here) and the real crushon.ai (not
+reachable from the build sandbox). Delimiters were checked; please run
+`flutter pub get && flutter analyze`.
+
+If something is still off on the live site
+------------------------------------------
+Errors now say what failed and list the on-screen controls the reader saw
+("Controls seen: …"). Send that text (and the lines tagged [CrushOn-reader] in
+the debug console) and the matching rule is a one-line change in
+assets/crushon/site_reader.js.

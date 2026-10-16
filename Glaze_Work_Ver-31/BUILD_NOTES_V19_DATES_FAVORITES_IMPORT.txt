@@ -1,0 +1,44 @@
+Glaze v19: Daily Ranking dates, Favorites sign-in, character import
+====================================================================
+
+1. Daily Ranking date picker (stuck on the 9th, other days did nothing)
+   Cause: the site's calendar popup has no role=dialog/role=grid or calendar
+   class, and prints "OCT" and "2026" as separate pieces, so the reader never
+   found it ("calendar not found", swallowed). The app also never asked the
+   site which days exist, so it capped the picker at the newest day it had seen.
+   Fix (assets/crushon/site_reader.js): the popup is now found by CONTENT
+   (weekday header + day numbers), month/year are read from separate pieces,
+   struck-through/disabled days are detected, previous/next-month buttons are
+   found by position. New __gzCO.readDateRange() opens the site's calendar and
+   reports the real first/last allowed day; the app uses it for the picker
+   bounds (crushon_site_reader.dart, _syncDaily), so the 10th is selectable.
+
+2. Favorites "Sign in to CrushOn to view your favorites"
+   Cause: a hard gate on the app's own signed-in flag, which starts false, loads
+   asynchronously and only turns true when Done is pressed in the in-app sign-in
+   sheet. The reader also looked for a text tab "Favorites", but on the site the
+   star is an icon with no text, on the profile page.
+   Fix: gate removed (catalog_provider.dart); the reader checks the real session
+   on the site. New __gzCO.openProfileFavorites(): opens the profile (avatar),
+   finds the icon-only tab row, picks the star tab, selects "Characters". The
+   error, when truly signed out, now says where to sign in.
+   NOTE: signing in on your phone's browser does not count; the app has its own
+   session. Sign in once via Settings > Providers > CrushOn and tap Done.
+
+3. Character import (UUID title, empty card, missing picture)
+   Cause: when the page read found no known field names it fell back to a card
+   named with the UUID and empty fields, and the import saved that.
+   Fix (crushon_provider.dart, catalog_detail_launcher.dart): the list card the
+   user tapped (name, picture, tags, creator, blurb) is now merged in for every
+   field the page read could not fill.
+   Not fixed: description/first message still depend on the site's JSON; if the
+   page does not expose them they stay empty (no schema to rely on).
+
+GIFs: imported avatars are still saved as <id>.png with a flattened thumbnail;
+untouched.
+
+Tests (tools/crushon_reader_test)
+  node run_tests.js        32 passed (existing)
+  node calendar_test.js     9 passed (site-style calendar, new)
+  node profile_test.js      1 passed (icon-only star tab, new)
+Dart not compiled (no Flutter SDK here). Run: flutter pub get && flutter analyze

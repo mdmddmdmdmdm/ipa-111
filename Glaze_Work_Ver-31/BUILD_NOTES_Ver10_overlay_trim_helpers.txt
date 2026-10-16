@@ -1,0 +1,74 @@
+Glaze WIP Ver10 - CrushOn overlay, Trim persistence, Prompt Helpers
+(Written without a Flutter toolchain: nothing here has been compiled or run.
+ Run `flutter analyze` first and send me anything it flags.)
+
+1. CrushOn art popping over the screen while scrolling
+   Cause (from the screen recording): CrushOn's hidden desktop-sized browser
+   (1100x1000) was left visible by iOS and painted over the app.
+   - ios/Runner/AppDelegate.swift: new channel app.glaze.flutter/hidden_webviews.
+     "hide" makes any web view >= 900pt wide invisible and untouchable (kept
+     alive), and keeps re-checking for ~6 seconds.
+   - crushon_site_reader.dart: calls it when a reader browser starts, after it
+     is created, after it loads, and before every read job (iOS only).
+   - catalog_card.dart: card image is also clipped (safety only).
+   Not confirmed on a device.
+
+2. Trim Incompl. Sentences resetting
+   Cause: the setting had no database column, so it was lost whenever presets
+   reloaded. Added api_configs.trim_incomplete_sentences, schema 139 -> 140
+   (migrations/upgrade_v140.dart), repository mapping both ways, and updated the
+   expected version in test/db_migration_suite.dart. Existing presets stay off.
+
+3. Prompt Helpers / AI speaking for the user
+   - User Agency and User Name Accuracy now also send stop sequences built from
+     the persona name ("Name:" line starts), so the provider cuts the reply at
+     the point the model starts writing the user. OpenAI-style, OpenRouter,
+     Anthropic (stop_sequences) and Gemini (stopSequences) all carry them.
+     (prompt_helpers.dart, chat_transport_request.dart, both transports,
+     stream_generation_service.dart). The Responses API has no stop parameter.
+   - Studio mode never received the helpers (it builds its own messages). They
+     are now appended as the last system message there.
+   - Fixed a race where loading saved helper choices could overwrite a toggle
+     changed right after launch (prompt_helpers_provider.dart).
+
+4. Short / Medium / Long Response helpers (re-checked)
+   - The length instruction is sent the same way as the other helpers (end of
+     prompt, system block; also in Studio mode now).
+   - The code-level cap for Short/Medium only cut at blank lines, so replies
+     written with single line breaks were never capped. reply_trimmer.dart now
+     falls back to whole lines with a word ceiling (Short ~180, Medium ~450)
+     when a reply has no blank lines. Long has no cap (it only asks for length);
+     a small Max Output Tokens will still cut a Long reply.
+
+5. "HTTP 400 ... conversation roles must alternate" (chat-template models)
+   Some models/servers (Mistral/Llama-style templates) reject any prompt that is
+   not: optional system message, then strictly user/assistant/user/...
+   post_processing_chat_transport.dart now notices that 400 (role-alternation /
+   "Unable to generate parser for this template" / raise_exception), retries the
+   same message once with Strict post-processing (merge same-role turns, later
+   system messages become user, start on a user turn), and remembers that
+   endpoint+model so later messages use Strict from the first try. It only
+   retries if nothing was streamed yet and the connection wasn't already on
+   Strict/Single. The memory is per app run; to make it permanent set
+   API settings -> Prompt post-processing -> Strict for that connection.
+   (chat_transport_request.dart: withMessages can now set the mode.)
+
+6. New preset: "Balanced Roleplay"  (assets/presets/balanced_roleplay.json)
+   Registered in core/services/featured_presets.dart (bundledPresets). It is
+   added to the library once on launch (also on existing installs), is yours to
+   edit, and is not put back if deleted.
+   - One plain main prompt: stay in character, keep continuity, react and move
+     the scene on a little, *actions* / "dialogue", show feelings through
+     behaviour, vary wording, never write {{user}}'s side, match the scene's
+     pace (no fixed word counts), no out-of-character notes.
+   - Every block sits before the chat history (the summary is no longer a
+     mid-chat system message), so the request is system messages followed by
+     the chat. That shape works with strict chat-template models too.
+
+7. Default API presets (settings/api_list_provider.dart)
+   Mag mell, Rocia XL, the drum Cydonia, darkest planet, Gemma unc, grand
+   horror, magnum v4, Rp max Arli - all Custom Chat Completion pointing at
+   http://192.168.1.59:11434/v1. Added once (new installs, and existing installs
+   for any name not already in the list - no duplicates), then yours to edit or
+   delete; deleted ones are not put back. The model field is left empty: open a
+   preset and use Fetch models to pick its model.

@@ -1,0 +1,8 @@
+Glaze provider-account restore changes (V9)
+
+- JanitorAI now captures its Supabase auth-cookie snapshot after a successful sign-in and stores it with that specific saved JanitorAI account.
+- Tapping a saved JanitorAI account clears only the current JanitorAI identity, restores that account's auth cookies, and opens JanitorAI's own login page so the site can validate/refresh the session.
+- JanitorAI logout no longer calls deleteAllCookies(), which could sign the user out of SpicyChat or third-party identity providers in the shared WebView cookie store. It removes cookies scoped to janitorai.com only.
+- No Google/Apple passwords are captured or replayed. If a site's session expires or the provider changes its authentication flow, the user may still need to complete that provider's sign-in again.
+
+Validation note: this environment does not have the Flutter SDK installed, so `flutter analyze` and device-level OAuth testing could not be run here. Please test Google/Apple/email sign-in and saved-account restore on the target devices before release.
