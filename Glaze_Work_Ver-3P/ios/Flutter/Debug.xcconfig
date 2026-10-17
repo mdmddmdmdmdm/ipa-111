@@ -1,3 +1,0 @@
-#include "Channel.xcconfig"
-#include? "Runner/Configs/Env.xcconfig"
-#include "Generated.xcconfig"
