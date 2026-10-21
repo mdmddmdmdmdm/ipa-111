@@ -316,6 +316,31 @@ jobs:
               perl -0pi -e 's/^("""\))[ \t]*\n(\s*\} catch)/$1;\n$2/mg' "$F"
             done
 
+            # Safety net: DragStartBehavior is defined in flutter/gestures.dart and is
+            # not re-exported by material.dart on every Flutter release. Without the
+            # import the analyzer reports "Undefined name 'DragStartBehavior'" in lib/,
+            # which aborts the build. Adds a narrow `show` import where it is missing.
+            { grep -rl --include=*.dart 'DragStartBehavior' lib 2>/dev/null || true; } | while IFS= read -r F; do
+              if ! grep -q 'package:flutter/gestures.dart' "$F"; then
+                echo "Adding gestures import (DragStartBehavior) to $F"
+                perl -0pi -e "s|^import |import 'package:flutter/gestures.dart' show DragStartBehavior;\nimport |m" "$F"
+              fi
+            done
+
+            # Safety net: easy_localization / intl bring in their own `TextDirection`
+            # (constants LTR / RTL, no `ltr`), which hides Flutter's. `TextDirection.ltr`
+            # in such a file fails with "The getter 'ltr' isn't defined for the type
+            # 'TextDirection'". Qualify it with the dart:ui type instead.
+            { grep -rlE --include=*.dart '(^|[^A-Za-z0-9_.])TextDirection\.(ltr|rtl)' lib 2>/dev/null || true; } | while IFS= read -r F; do
+              if grep -qE 'package:(easy_localization|intl)/' "$F"; then
+                echo "Qualifying TextDirection with dart:ui in $F"
+                perl -pi -e 's/(?<![\w.])TextDirection\.(ltr|rtl)\b/ui.TextDirection.$1/g' "$F"
+                if ! grep -qE "import 'dart:ui'[^;]*[[:space:]]as[[:space:]]+ui([[:space:]]|;)" "$F"; then
+                  perl -0pi -e "s|^import |import 'dart:ui' as ui show TextDirection;\nimport |m" "$F"
+                fi
+              fi
+            done
+
             awk '/^flutter:/{f=1;next} f&&/^[^ #]/{f=0} f&&/^[ ]+assets:/{a=1;next} a&&/^[ ]+- /{sub(/^[ ]+- /,"");print;next} a&&!/^[ ]+(-|#)/&&NF{a=0}' pubspec.yaml | tr -d '\r' | while IFS= read -r A; do
               [ -z "$A" ] && continue
               [ "$A" = ".env" ] && continue
